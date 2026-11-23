@@ -1,0 +1,52 @@
+# Ambiente dos testes E2E, usado junto com o compose.yaml pelo `make test-e2e`:
+# relay + banco + Mailpit + um agente Linux com tela sintética + Playwright.
+services:
+  relay:
+    command: []
+    volumes: !reset []
+    # valores fixos: um .env com SMTP real nunca pode vazar para os testes
+    environment:
+      RELAY_PUBLIC_URL: http://relay:8080
+      RELAY_ADMIN_EMAIL: chefe@example.test
+      SMTP_HOST: mailpit
+      SMTP_PORT: "1025"
+      SMTP_USER: ""
+      SMTP_PASSWORD: ""
+      SMTP_STARTTLS: "false"
+      EMAIL_REMETENTE: remoteit@example.test
+
+  mailpit:
+    image: axllent/mailpit:v1.34.0
+
+  agent:
+    build:
+      context: .
+      target: agent-sim
+    hostname: e2e-pc
+    environment:
+      REMOTEIT_RELAY: ws://relay:8080
+      REMOTEIT_KEY: ${RELAY_AGENT_KEY}
+    depends_on:
+      relay:
+        condition: service_healthy
+
+  e2e:
+    image: mcr.microsoft.com/playwright:v1.65.1-resolute
+    working_dir: /e2e
+    # usuário do host: os relatórios em frontend/test-results não ficam como root
+    user: "${E2E_UID:-1000}:${E2E_GID:-1000}"
+    volumes:
+      - ./frontend:/e2e
+    environment:
+      E2E_BASE_URL: http://relay:8080
+      E2E_MAILPIT_URL: http://mailpit:8025
+      E2E_ADMIN_PASS: ${RELAY_ADMIN_PASS}
+      CI: "1"
+      HOME: /tmp
+    command: ["npx", "playwright", "test"]
+    depends_on:
+      relay:
+        condition: service_healthy
+      agent:
+        condition: service_started
+    profiles: [e2e]

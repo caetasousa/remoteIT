@@ -1,0 +1,17 @@
+# binários gerados pelo build.sh
+/dist/
+*.exe
+
+# build do console: só a pasta (com .gitkeep) é versionada
+/internal/relay/web/dist/*
+!/internal/relay/web/dist/.gitkeep
+
+# frontend
+/frontend/node_modules/
+/frontend/test-results/
+/frontend/playwright-report/
+
+# segredos
+.env
+*.env
+certs/

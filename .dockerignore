@@ -1,0 +1,11 @@
+.git
+.agents
+dist
+frontend/node_modules
+frontend/test-results
+frontend/playwright-report
+internal/relay/web/dist/assets
+internal/relay/web/dist/index.html
+*.env
+.env
+certs

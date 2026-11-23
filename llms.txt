@@ -1,0 +1,40 @@
+# RemoteIT
+
+> Acesso remoto a PCs Windows pelo navegador, por WebSocket de saída na porta 443. Go (agente e relay), PostgreSQL e Svelte.
+
+## Overview
+
+Três programas: o agente (`cmd/agent`, um .exe Windows que captura a tela e injeta input), o relay
+(`cmd/relay`, servidor Linux que faz a ponte, guarda usuários e auditoria no PostgreSQL e embute o
+console) e o console (`frontend/`, Svelte 5 + TypeScript). O código Go fica em pacotes por contexto
+em `internal/`.
+
+## Key Concepts
+
+- **protocol**: contrato WebSocket (JSON + cabeçalho binário de 12 bytes), espelhado em `frontend/src/lib/protocol.ts`.
+- **hub**: agentes online em memória; 1 técnico por agente; um técnico novo assume a sessão.
+- **identity / audit**: usuários, papéis, sessões; todo acesso é auditado, e sem auditoria não há acesso.
+- **contas**: `identity.Accounts` + `relay/mail`; conta nova fica pendente até um admin aprovar (ADR 0006).
+- **session / media**: no agente, consentimento antes de vídeo e input; controle de fluxo com no máximo 2 quadros sem ACK.
+- **storage/postgres**: único pacote com SQL; migrations em `migrations/*.sql`.
+- **lifecycle / desktop**: duas edições do agente (`main.edition`): portátil e serviço. O serviço lança o worker como SYSTEM na sessão do console, e captura e entrada seguem o desktop ativo (Default/Winlogon). Nada abre janela; logs em %ProgramData%\RemoteIT (ADRs 0007 e 0008).
+
+## Docs
+
+- Fluxos (diagramas de sequência de tudo): docs/FLUXOS.md
+- Agente no Windows (edições, instalar, logs, problemas): docs/AGENTE-WINDOWS.md
+- Arquitetura: docs/ARQUITETURA.md
+- Decisões (ADRs): docs/adr/README.md
+- Protocolo: docs/PROTOCOLO.md
+- API HTTP: docs/API.md
+- Segurança: docs/SEGURANCA.md
+- Design do console: docs/DESIGN.md
+- Testes: docs/TESTES.md
+- Deploy: docs/DEPLOY.md
+- Contribuição: CONTRIBUTING.md
+
+## Commands
+
+- `make test` (unitários), `make test-integration` (Docker), `make test-e2e` (Docker), `make check`
+- `make dev-db`, `make dev-relay`, `make dev-agent`, `make dev-frontend`
+- `RELAY=wss://... AGENT_KEY=... ./build.sh` → `dist/suporte-ti.exe`, `dist/suporte-ti-servico.exe`, `dist/relay`

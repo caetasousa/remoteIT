@@ -1,0 +1,6 @@
+# Desenvolvimento: só expõe o banco em localhost:5432 para o relay rodar
+# fora do Docker (make dev-db / make dev-relay).
+services:
+  db:
+    ports:
+      - "127.0.0.1:5432:5432"

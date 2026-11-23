@@ -1,0 +1,64 @@
+# Produção: relay + PostgreSQL. Configure o .env a partir do .env.example.
+#   docker compose up -d --build
+#
+# Com Cloudflare Tunnel no próprio compose: docker compose --profile tunnel up -d
+# (a rota do túnel deve apontar para http://relay:8080).
+name: remoteit
+
+services:
+  db:
+    image: postgres:19-alpine
+    environment:
+      POSTGRES_DB: remoteit
+      POSTGRES_USER: remoteit
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?defina POSTGRES_PASSWORD no .env}
+    volumes:
+      - db-data:/var/lib/postgresql
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U remoteit -d remoteit"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+    restart: unless-stopped
+
+  relay:
+    build:
+      context: .
+      target: relay
+    image: remoteit-relay:latest
+    command: ["-agent-exe", "/dist/suporte-ti.exe"]
+    environment:
+      DATABASE_URL: postgres://remoteit:${POSTGRES_PASSWORD}@db:5432/remoteit?sslmode=disable
+      RELAY_AGENT_KEY: ${RELAY_AGENT_KEY:?defina RELAY_AGENT_KEY no .env}
+      RELAY_ADMIN_USER: ${RELAY_ADMIN_USER:-admin}
+      RELAY_ADMIN_PASS: ${RELAY_ADMIN_PASS:-}
+      RELAY_CLIENT_IP_HEADER: ${RELAY_CLIENT_IP_HEADER:-}
+      RELAY_PUBLIC_URL: ${RELAY_PUBLIC_URL:-}
+      RELAY_ADMIN_EMAIL: ${RELAY_ADMIN_EMAIL:-}
+      SMTP_HOST: ${SMTP_HOST:-}
+      SMTP_PORT: ${SMTP_PORT:-587}
+      SMTP_USER: ${SMTP_USER:-}
+      SMTP_PASSWORD: ${SMTP_PASSWORD:-}
+      SMTP_STARTTLS: ${SMTP_STARTTLS:-true}
+      EMAIL_REMETENTE: ${EMAIL_REMETENTE:-}
+      EMAIL_REMETENTE_NOME: ${EMAIL_REMETENTE_NOME:-RemoteIT}
+    volumes:
+      - ./dist:/dist:ro # o .exe gerado pelo build.sh, servido em /download/agent.exe
+    ports:
+      - "${RELAY_BIND:-127.0.0.1}:${RELAY_PORT:-8080}:8080"
+    depends_on:
+      db:
+        condition: service_healthy
+    restart: unless-stopped
+
+  tunnel:
+    image: cloudflare/cloudflared:latest
+    command: tunnel --no-autoupdate run
+    environment:
+      TUNNEL_TOKEN: ${TUNNEL_TOKEN:-}
+    depends_on: [relay]
+    restart: unless-stopped
+    profiles: [tunnel]
+
+volumes:
+  db-data:
