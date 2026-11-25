@@ -16,7 +16,9 @@
   let hours = $state(24);
   let uses = $state(1);
   let created = $state(''); // URL do último link criado (o código só aparece agora)
-  let copied = $state(false);
+  let copied = $state<'' | 'link' | 'cmd'>('');
+  // instala sem navegador: o cliente cola no PowerShell (veja installps.go no relay)
+  const command = $derived(created ? `irm ${created}/ps | iex` : '');
 
   async function refresh() {
     try {
@@ -62,7 +64,7 @@
   async function createLink(e: SubmitEvent) {
     e.preventDefault();
     error = '';
-    copied = false;
+    copied = '';
     try {
       const l = await api.createLink(edition, hours, uses);
       created = `${location.origin}${l.path}`;
@@ -72,9 +74,9 @@
     }
   }
 
-  async function copy() {
-    await navigator.clipboard.writeText(created);
-    copied = true;
+  async function copy(what: 'link' | 'cmd') {
+    await navigator.clipboard.writeText(what === 'link' ? created : command);
+    copied = what;
   }
 
   async function revoke(l: InstallLink) {
@@ -143,11 +145,26 @@
       </div>
       <button class="pill" type="submit">Gerar link</button>
       {#if created}
+        <span class="how">No navegador do cliente</span>
         <div class="created" data-testid="install-link">
           <input readonly value={created} aria-label="Link gerado" onfocus={(e) => e.currentTarget.select()} />
-          <button type="button" onclick={copy}>{copied ? 'Copiado' : 'Copiar'}</button>
+          <button type="button" onclick={() => copy('link')}>{copied === 'link' ? 'Copiado' : 'Copiar'}</button>
         </div>
-        <small>Copie agora: por segurança, o link não aparece de novo.</small>
+        <span class="how">Ou sem navegador, no PowerShell do cliente</span>
+        <div class="created" data-testid="install-command">
+          <input
+            readonly
+            class="mono"
+            value={command}
+            aria-label="Comando do PowerShell"
+            onfocus={(e) => e.currentTarget.select()}
+          />
+          <button type="button" onclick={() => copy('cmd')}>{copied === 'cmd' ? 'Copiado' : 'Copiar'}</button>
+        </div>
+        <small>
+          Copie agora: por segurança, o link não aparece de novo. O comando baixa, confere e instala sem aviso de
+          download do navegador; alguns antivírus corporativos bloqueiam comandos assim — aí use o link.
+        </small>
       {/if}
       {#if links.length}
         <ul class="links">
@@ -255,6 +272,11 @@
   .created {
     display: flex;
     gap: 6px;
+  }
+  .how {
+    font-size: 0.75rem;
+    color: var(--dim);
+    margin-top: 4px;
   }
   .created input {
     flex: 1;

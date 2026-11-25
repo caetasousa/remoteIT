@@ -36,6 +36,7 @@
 //	GET    /download/agent.exe          agente portátil, marcado com um código do técnico
 //	GET    /download/agent-servico.exe  agente que instala o serviço, marcado
 //	GET    /i/{code}            público: .exe de um link de instalação
+//	GET    /i/{code}/ps         público: o mesmo link como script PowerShell (irm … | iex)
 //	GET    /download/viewer.exe visualizador nativo do técnico (Windows)
 //	GET    /api/viewer/update   versão disponível do visualizador (assinada)
 //	GET    /api/viewer/update.exe  o visualizador, para a atualização
@@ -86,6 +87,9 @@ type Config struct {
 	// UpdateManifest é o update.json do build.sh (versão e assinaturas dos
 	// .exe). Vazio ou ausente: nenhuma atualização é oferecida.
 	UpdateManifest string
+	// PublicURL é a origem pública do relay (RELAY_PUBLIC_URL), usada no
+	// script de instalação por PowerShell. Vazia: vem da requisição.
+	PublicURL string
 	// Static contém o build do frontend, com index.html na raiz.
 	Static fs.FS
 	// Health confere dependências externas (o banco). Nil = sempre saudável.
@@ -159,6 +163,7 @@ func New(cfg Config) http.Handler {
 		mux.Handle("GET /download/agent-servico.exe", s.auth(s.download(machines.EditionService)))
 	}
 	mux.HandleFunc("GET /i/{code}", s.installLink)
+	mux.HandleFunc("GET /i/{code}/ps", s.installScript)
 	mux.HandleFunc("GET /healthz", s.healthz)
 	mux.Handle("GET /", staticHandler(cfg.Static))
 	return securityHeaders(mux)

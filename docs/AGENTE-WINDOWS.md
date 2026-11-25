@@ -52,6 +52,21 @@ suporte-ti-servico.exe (Downloads)
 
 O arquivo em Downloads pode ser apagado: o serviço usa a cópia do Program Files.
 
+### ⚡ Sem navegador, com um comando
+
+O técnico gera um **link de instalação** no console e copia o comando que aparece embaixo dele. No PC
+do cliente, abra o **PowerShell** (não precisa ser como administrador) e cole:
+
+```powershell
+irm https://suporte.exemplo.com/i/<código>/ps | iex
+```
+
+O comando baixa o agente do próprio link, confere o **SHA-256** que o relay calculou, pede o UAC uma
+vez e mostra **"Pronto"** em verde (ou o erro e onde ver o log). Num link **Executar**, o agente vai
+para `%LOCALAPPDATA%\RemoteIT` e roda sem instalar nada. Não há aviso de download do navegador nem
+arquivo em Downloads. Alguns antivírus corporativos bloqueiam comandos `irm … | iex`; aí use o link
+no navegador.
+
 ### 💻 Pelo terminal (PowerShell como Administrador)
 
 ```powershell

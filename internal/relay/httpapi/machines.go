@@ -1,10 +1,14 @@
 package httpapi
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
+	"io"
 	"net/http"
 	"os"
 	"strconv"
+	"strings"
 	"time"
 
 	"remoteit/internal/relay/agentbin"
@@ -140,19 +144,28 @@ func (s *server) exeFor(edition string) (path, name string) {
 	return s.AgentExe, "suporte-ti.exe"
 }
 
-// serveStamped envia o .exe da edição com code gravado no espaço reservado.
-func (s *server) serveStamped(w http.ResponseWriter, edition, code string) {
+// stamped devolve o .exe da edição com code gravado no espaço reservado, e o
+// nome com que ele é servido. status é o código HTTP do erro, se houver.
+func (s *server) stamped(edition, code string) (exe []byte, name string, status int, err error) {
 	path, name := s.exeFor(edition)
-	exe, err := os.ReadFile(path)
+	raw, err := os.ReadFile(path)
 	if err != nil {
 		s.Logger.Error("ler agente", "path", path, "err", err)
-		writeError(w, http.StatusServiceUnavailable, "agente indisponível no servidor")
-		return
+		return nil, "", http.StatusServiceUnavailable, errors.New("agente indisponível no servidor")
 	}
-	out, err := agentbin.Stamp(exe, code)
+	out, err := agentbin.Stamp(raw, code)
 	if err != nil {
 		s.Logger.Error("gravar código no agente: refaça o build.sh", "path", path, "err", err)
-		writeError(w, http.StatusServiceUnavailable, "agente do servidor desatualizado")
+		return nil, "", http.StatusServiceUnavailable, errors.New("agente do servidor desatualizado")
+	}
+	return out, name, 0, nil
+}
+
+// serveStamped envia o .exe da edição com code gravado no espaço reservado.
+func (s *server) serveStamped(w http.ResponseWriter, edition, code string) {
+	out, name, status, err := s.stamped(edition, code)
+	if err != nil {
+		writeError(w, status, err.Error())
 		return
 	}
 	w.Header().Set("Content-Type", "application/vnd.microsoft.portable-executable")
@@ -178,25 +191,77 @@ func (s *server) download(edition string) http.Handler {
 	})
 }
 
-// installLink é público: quem tem o link baixa o .exe já marcado com o
-// código do link, sem precisar de conta.
-func (s *server) installLink(w http.ResponseWriter, r *http.Request) {
+// linkCode confere o limite por IP e o código do link; ok = false se já
+// respondeu (limite, código inválido ou erro).
+func (s *server) linkCode(w http.ResponseWriter, r *http.Request) (string, machines.Code, bool) {
 	if !s.linkLimit.allow(clientKey(s.clientAddr(r))) {
 		writeError(w, http.StatusTooManyRequests, "muitas tentativas; tente mais tarde")
-		return
+		return "", machines.Code{}, false
 	}
 	code := r.PathValue("code")
 	c, err := s.Machines.Lookup(r.Context(), code)
 	if errors.Is(err, machines.ErrInvalidCode) {
 		http.Error(w, "Link de instalação inválido, vencido ou já usado. Peça um novo ao técnico.", http.StatusNotFound)
-		return
+		return "", machines.Code{}, false
 	}
 	if err != nil {
 		s.Logger.Error("link de instalação", "err", err)
 		http.Error(w, "erro interno", http.StatusInternalServerError)
+		return "", machines.Code{}, false
+	}
+	return code, c, true
+}
+
+// installLink é público: quem tem o link baixa o .exe já marcado com o
+// código do link, sem precisar de conta.
+func (s *server) installLink(w http.ResponseWriter, r *http.Request) {
+	if code, c, ok := s.linkCode(w, r); ok {
+		s.serveStamped(w, c.Edition, code)
+	}
+}
+
+// installScript é público: o mesmo link, como script PowerShell para
+// "irm <link>/ps | iex". Instala sem passar pelo navegador (sem aviso de
+// download, sem "(1)" no nome, sem cache): o script baixa o .exe marcado,
+// confere o SHA-256 calculado aqui e instala. Veja installps.go.
+func (s *server) installScript(w http.ResponseWriter, r *http.Request) {
+	code, c, ok := s.linkCode(w, r)
+	if !ok {
 		return
 	}
-	s.serveStamped(w, c.Edition, code)
+	exe, name, status, err := s.stamped(c.Edition, code)
+	if err != nil {
+		writeError(w, status, err.Error())
+		return
+	}
+	sum := sha256.Sum256(exe)
+	script, err := installPS(installPSData{
+		ExeURL:  s.publicBase(r) + "/i/" + code,
+		SHA256:  hex.EncodeToString(sum[:]),
+		Name:    name,
+		Service: c.Edition == machines.EditionService,
+	})
+	if err != nil {
+		s.Logger.Error("script de instalação", "err", err)
+		http.Error(w, "erro interno", http.StatusInternalServerError)
+		return
+	}
+	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+	w.Header().Set("Cache-Control", "no-store, private")
+	io.WriteString(w, script)
+}
+
+// publicBase é a origem pública do relay (RELAY_PUBLIC_URL). Sem ela, vem da
+// requisição: o script só baixa do mesmo lugar de onde ele próprio veio.
+func (s *server) publicBase(r *http.Request) string {
+	if s.PublicURL != "" {
+		return strings.TrimRight(s.PublicURL, "/")
+	}
+	scheme := "http" // localhost e testes, sem TLS na frente
+	if r.TLS != nil || r.Header.Get("X-Forwarded-Proto") == "https" {
+		scheme = "https" // o cloudflared manda X-Forwarded-Proto
+	}
+	return scheme + "://" + r.Host
 }
 
 // ---------- cadastro do agente ----------

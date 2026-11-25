@@ -17,7 +17,7 @@
 //	RELAY_ADMIN_USER   nome do admin inicial (padrão "admin")
 //	RELAY_ADMIN_PASS   senha do admin inicial; só é usada enquanto não existe
 //	                   nenhum usuário no banco
-//	RELAY_PUBLIC_URL   base dos links dos e-mails, ex.: https://suporte.exemplo.com
+//	RELAY_PUBLIC_URL   base dos links dos e-mails e do script de instalação, ex.: https://suporte.exemplo.com
 //	RELAY_ADMIN_EMAIL  quem confirmar esta caixa no cadastro vira admin aprovado
 //	SMTP_HOST, SMTP_PORT, SMTP_USER, SMTP_PASSWORD, SMTP_STARTTLS,
 //	EMAIL_REMETENTE, EMAIL_REMETENTE_NOME
@@ -137,6 +137,7 @@ func run(opt server.Options, agentExe, agentSvcExe string, logger *slog.Logger) 
 		LegacyAgents:    legacy,
 		AgentExe:        agentExe,
 		AgentServiceExe: agentSvcExe,
+		PublicURL:       strings.TrimRight(os.Getenv("RELAY_PUBLIC_URL"), "/"),
 		UpdateManifest:  updateManifest(agentExe),
 		ViewerExe:       sibling(agentExe, "remoteit-tecnico.exe"),
 		Static:          web.FS(),

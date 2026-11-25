@@ -129,4 +129,10 @@ test('link de instalação baixa o agente sem login', async ({ page, request }) 
   expect([200, 503]).toContain(res.status());
   const bad = await request.get('/i/nao-existe');
   expect(bad.status()).toBe(404);
+
+  // o mesmo link, sem navegador: o comando do PowerShell aponta para o script
+  await expect(page.getByLabel('Comando do PowerShell')).toHaveValue(`irm ${url}/ps | iex`);
+  const ps = await request.get(new URL(url).pathname + '/ps');
+  expect([200, 503]).toContain(ps.status());
+  expect((await request.get('/i/nao-existe/ps')).status()).toBe(404);
 });

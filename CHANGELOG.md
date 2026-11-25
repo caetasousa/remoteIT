@@ -9,6 +9,10 @@ O formato segue o [Keep a Changelog](https://keepachangelog.com/pt-BR/1.1.0/) e 
 
 ### Added
 
+- **Instalar sem navegador** (`irm https://…/i/<código>/ps | iex`): o console mostra o comando junto
+  com o link de instalação. O script baixa o `.exe` do link, confere o SHA-256 calculado pelo relay e
+  instala (serviço com um UAC, ou portátil em `%LOCALAPPDATA%\RemoteIT`), com o resultado no
+  terminal. Rota pública `GET /i/{código}/ps`, com o mesmo limite por IP do link.
 - **Visualizador do técnico com interface nova**: cabeçalho com usuário e papel, busca, lista com
   estado colorido, usuário logado, dono e versão do agente, rodapé com o que o PC decodifica
   (H.264, 4:4:4, AV1); na sessão, **barra de telemetria** (codec, GPU/CPU, resolução, FPS

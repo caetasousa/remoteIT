@@ -641,12 +641,32 @@ sequenceDiagram
     Note over R: link permanente: serve para o próximo cliente também,<br/>até a Ana revogar
 ```
 
+**Sem navegador:** o console mostra também o comando `irm https://…/i/<código>/ps | iex`. Colado no
+PowerShell do cliente, ele baixa um script do relay, que baixa o `.exe` do mesmo link, confere o
+SHA-256 que o relay calculou, instala (serviço: um UAC; portátil: copia para
+`%LOCALAPPDATA%\RemoteIT` e inicia) e mostra o resultado no terminal. Sem aviso de download, sem
+`(1)` no nome, sem cache. Código: [`httpapi/installps.go`](../internal/relay/httpapi/installps.go).
+
+```mermaid
+sequenceDiagram
+    autonumber
+    participant C as 🙋 PowerShell do cliente
+    participant R as 🔀 Relay
+    C->>R: irm /i/<código>/ps
+    R-->>C: script com a URL do .exe e o SHA-256 dele
+    C->>R: Invoke-WebRequest /i/<código>
+    R-->>C: suporte-ti-servico.exe marcado
+    C->>C: confere o SHA-256 (diferente: apaga e para)
+    C->>C: Start-Process install -Verb RunAs (UAC) → código de saída
+    Note over C: "Pronto" em verde, ou o erro e onde ver o log
+```
+
 | Regra | Valor |
 |---|---|
 | Validade | 1 hora a 7 dias, ou **sem prazo** |
 | Máquinas por link | 1 a 100, ou **sem limite** |
 | Revogar | o dono do link ou um admin; quem ainda não instalou não baixa mais |
-| Limite por IP | 200 downloads/dia em `/i/`, 120 cadastros/hora |
+| Limite por IP | 200 downloads/dia em `/i/` (o script e o `.exe` contam um cada), 120 cadastros/hora |
 
 ---
 

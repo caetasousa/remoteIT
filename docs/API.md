@@ -37,6 +37,7 @@
 | `GET /api/viewer/update` | logado | | oferta assinada da edição `tecnico` · 204 sem atualização |
 | `GET /api/viewer/update.exe` | logado | | o visualizador, para a atualização automática |
 | `GET /i/{código}` | **público** | | o `.exe` da edição do link, marcado com o código · 404 inválido/vencido/esgotado · 429 (200/dia por IP) |
+| `GET /i/{código}/ps` | **público** | | script PowerShell para `irm <link>/ps \| iex`: baixa o `.exe` do mesmo link, confere o SHA-256 e instala (serviço com UAC, ou portátil em `%LOCALAPPDATA%\RemoteIT`). `text/plain; charset=utf-8`, `no-store` · mesmos 404/429 do link |
 | `POST /api/agent/enroll` | **público** + código | `{code, name}` | 201 `{id, secret}` · 403 código inválido · 400 · 429 (120/h por IP) |
 | `GET /api/users` | admin | | 200 `User[]` · 403 |
 | `POST /api/users` | admin | `{username, password, role}` | 201 `User` · 400 inválido · 409 duplicado |

@@ -5,6 +5,8 @@ package integration
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"io"
 	"net/http"
 	"os"
@@ -256,6 +258,32 @@ func TestInstallLink(t *testing.T) {
 	code := stampedCode(t, exe)
 	if "/i/"+code != link.Path {
 		t.Errorf("código no .exe %q não é o do link %q", code, link.Path)
+	}
+
+	// o mesmo link como script PowerShell (irm <link>/ps | iex): baixa daqui
+	// mesmo e confere o hash exato do .exe que o link serve
+	resp, err = http.Get(e.srv.URL + link.Path + "/ps")
+	if err != nil {
+		t.Fatal(err)
+	}
+	script, _ := io.ReadAll(resp.Body)
+	resp.Body.Close()
+	sum := sha256.Sum256(exe)
+	for _, want := range []string{
+		"$url = '" + e.srv.URL + link.Path + "'",
+		"$sha = '" + hex.EncodeToString(sum[:]) + "'",
+		"suporte-ti-servico.exe", "-Verb RunAs",
+	} {
+		if !strings.Contains(string(script), want) {
+			t.Errorf("script sem %q:\n%s", want, script)
+		}
+	}
+	if resp.StatusCode != 200 || !strings.HasPrefix(resp.Header.Get("Content-Type"), "text/plain") ||
+		resp.Header.Get("Cache-Control") != "no-store, private" {
+		t.Errorf("script: status %d, headers %v", resp.StatusCode, resp.Header)
+	}
+	if r, _ := http.Get(e.srv.URL + "/i/nao-existe/ps"); r.StatusCode != http.StatusNotFound {
+		t.Errorf("script de link inventado: status %d", r.StatusCode)
 	}
 
 	if _, _, s := e.enroll(code, "PC1"); s != http.StatusCreated {

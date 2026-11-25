@@ -13,7 +13,7 @@
 | 1 | ✅ [🔐 Cada técnico com as suas máquinas (agente por usuário)](#por-usuario) | 🔴 | feito | fecha a maior falha de segurança e muda o modelo de dados; o resto se apoia nela |
 | 2 | ✅ [🆔 ID de máquina único e credencial por máquina](#id-maquina) | 🔴 | feito | parte do item 1; impede uma máquina se passar por outra |
 | 3 | ✅ [🔄 Atualização automática do agente](#auto-update) | 🔴 | feito | acaba com "baixe de novo, confira o hash, reinstale" |
-| 4 | 🟨 [📥 Instalar sem passar pelo navegador](#sem-navegador) | 🔴 | 4a feito; resto ⏱️ 2–4 | o navegador foi a origem da maior parte dos problemas de instalação |
+| 4 | 🟨 [📥 Instalar sem passar pelo navegador](#sem-navegador) | 🔴 | 4a e 4b feitos; MSI e bootstrapper ⏱️ 2–3 | o navegador foi a origem da maior parte dos problemas de instalação |
 | 5 | 🟨 [🛡️ Endurecer o login e o console](#login) | 🟡 | limite e CSP feitos; resto ⏱️ 2 | limite de tentativas, 2FA, CSP |
 | 6 | [⚙️ CI no GitHub, com Windows](#ci) | 🟡 | adiado: o usuário vai definir a esteira | hoje nada do Windows é testado automaticamente |
 | 7 | 🟨 [🖥️ Visualizador nativo para o técnico](#viewer-nativo) | 🟡 | feito, com 4:4:4; faltam vários monitores e arquivos | o único caminho para cor 4:4:4 e menor latência |
@@ -185,7 +185,7 @@ flowchart TD
 <a id="sem-navegador"></a>
 ## 4️⃣ 🟨 📥 Instalar sem passar pelo navegador
 
-> 🟨 **Em parte:** a opção **a** (link de instalação) foi feita em 24/11/2026; desde 25/11 o link também pode ser **sem prazo** e **sem limite de máquinas** (o "link do técnico"). As opções b, c e d continuam abertas.
+> 🟨 **Em parte:** a opção **a** (link de instalação) foi feita em 24/11/2026; desde 25/11 o link também pode ser **sem prazo** e **sem limite de máquinas** (o "link do técnico"). A opção **b** (comando de uma linha no PowerShell, `irm <link>/ps | iex`) foi feita em 25/11/2026, com conferência de SHA-256. As opções c e d continuam abertas.
 
 ### ❗ O problema hoje
 
@@ -204,7 +204,7 @@ O navegador foi a origem de quase todos os tropeços:
 | Opção | Como o usuário instala | Prós | Contras | Esforço |
 |---|---|---|---|:---:|
 | ✅ **a. Link de instalação de uso único** | o técnico gera no console um link curto (`lab.../i/AB12CD`, válido por 24 h) e manda ao cliente; abrir o link baixa o `.exe` **já marcado** (item 1) | o cliente **não precisa de conta**; o técnico controla validade e usos | continua passando pelo navegador | ⏱️ 1 |
-| **b. Comando de uma linha (PowerShell)** | o técnico copia do console: `irm https://lab.../i/AB12CD \| iex` | sem navegador, sem "Manter", sem `(1)`; o script baixa, confere o hash, instala e mostra o resultado no terminal | **padrão usado por malware**: EDRs bloqueiam; política de execução do PowerShell pode impedir | ⏱️ 1–2 |
+| ✅ **b. Comando de uma linha (PowerShell)** | o técnico copia do console: `irm https://lab.../i/AB12CD \| iex` | sem navegador, sem "Manter", sem `(1)`; o script baixa, confere o hash, instala e mostra o resultado no terminal | **padrão usado por malware**: EDRs bloqueiam; política de execução do PowerShell pode impedir | ⏱️ 1–2 |
 | **c. Pacote MSI** | `msiexec /i suporte-ti.msi /qn CODIGO=AB12CD`, ou distribuído por **GPO / Intune / RMM** | o formato que TI corporativa espera; instala em 500 PCs de uma vez; desinstala por "Aplicativos" | build extra (WiX) | ⏱️ 2–3 |
 | **d. Instalador "de bolso" (bootstrapper)** | um `.exe` mínimo, que quase nunca muda, baixa sempre a versão atual do agente, confere a assinatura do projeto e a instala | o arquivo distribuído não envelhece | mais um programa para manter | ⏱️ 2–3 |
 
