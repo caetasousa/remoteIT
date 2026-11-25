@@ -1,7 +1,7 @@
 // Package media é o pipeline de vídeo do agente: escolhe o encoder, controla
 // o fluxo de quadros e adapta o bitrate à rede.
 //
-// As fontes de vídeo concretas ficam nos subpacotes (capture, jpeg, h264) e
+// As fontes de vídeo concretas ficam nos subpacotes (capture, jpeg, gpu) e
 // são injetadas por [Encoders], o que permite testar o pipeline com fontes
 // falsas e compilar este pacote em qualquer sistema.
 package media
@@ -24,7 +24,7 @@ var ErrReopen = errors.New("media: reabrir captura")
 
 // Frame é um quadro codificado.
 type Frame struct {
-	Codec    byte // protocol.CodecH264 ou protocol.CodecJPEG
+	Codec    byte // protocol.Codec*
 	Keyframe bool
 	W, H     int
 	Data     []byte
@@ -56,8 +56,14 @@ type Still interface {
 // Encoders são as fábricas de [Source] disponíveis no build.
 type Encoders struct {
 	// H264 pode devolver erro (sem GPU, sem Media Foundation, build sem CGO);
-	// o pipeline cai para JPEG.
+	// o pipeline cai para o próximo codec que o técnico aceita (no fim, JPEG).
 	H264 func(maxw, fps, kbps int) (Source, error)
+	// AVC444 é cor 4:4:4 em dois fluxos H.264 (veja internal/avc444). Só na
+	// resolução nativa e só com encoder de GPU. Opcional.
+	AVC444 func(fps, kbps int) (Source, error)
+	// AV1 só existe com encoder AV1 de GPU (placas de 2022 em diante).
+	// Opcional.
+	AV1  func(maxw, fps, kbps int) (Source, error)
 	JPEG func(maxw, kbps int) (Source, error)
 	// CursorShape devolve o nome CSS do cursor atual. Opcional.
 	CursorShape func() string

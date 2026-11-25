@@ -29,6 +29,7 @@ const (
 // Itens de menu da sessão.
 const (
 	idPreset0      = 1000 // + índice em client.Presets
+	idColor444     = 1010
 	idActualSize   = 1101
 	idFullscreen   = 1102
 	idCtrlShiftEsc = 1201
@@ -60,6 +61,7 @@ type sessionWin struct {
 	preset  string
 
 	actualSize bool
+	color444   bool // oferecer cor 4:4:4 ao agente (menu Qualidade)
 	full       bool
 	saved      rect
 	savedStyle uintptr
@@ -72,6 +74,8 @@ type sessionWin struct {
 	pending atomic.Bool                // já há um wmFrame na fila
 
 	mu     sync.Mutex
+	can    decoders        // o que este PC decodifica (achado ao conectar)
+	broken map[string]bool // codecs que falharam nesta sessão: fora do hello
 	sess   *client.Session
 	frame  *decode.Frame
 	status string
@@ -80,8 +84,9 @@ type sessionWin struct {
 }
 
 func (a *App) openSession(m client.Machine) {
-	w := &sessionWin{app: a, machine: m, preset: "quality", capture: true, keys: newKeyTranslator(),
-		out: make(chan func(*client.Session), 256), status: "Conectando…"}
+	w := &sessionWin{app: a, machine: m, preset: "quality", capture: true, color444: true, keys: newKeyTranslator(),
+		broken: map[string]bool{},
+		out:    make(chan func(*client.Session), 256), status: "Conectando…"}
 	w.title = "RemoteIT — " + m.Name
 	w.hwnd = a.createWindow(sessionClass, w.title, wsOverlappedWindow|wsClipChildren, 1280, 800, 0)
 	a.sessions[w.hwnd] = w
@@ -103,6 +108,8 @@ func (w *sessionWin) buildMenu() {
 	for i, p := range client.Presets {
 		pAppendMenuW.Call(q, mfString, uintptr(idPreset0+i), uintptr(unsafe.Pointer(utf16(p.Label))))
 	}
+	pAppendMenuW.Call(q, mfSeparator, 0, 0)
+	pAppendMenuW.Call(q, mfString, idColor444, uintptr(unsafe.Pointer(utf16("Cor 4:4:4 (texto colorido nítido; só na resolução nativa)"))))
 	v, _, _ := pCreatePopupMenu.Call()
 	pAppendMenuW.Call(v, mfString, idActualSize, uintptr(unsafe.Pointer(utf16("Tamanho real (1:1)"))))
 	pAppendMenuW.Call(v, mfString, idFullscreen, uintptr(unsafe.Pointer(utf16("Tela cheia\tCtrl+Alt+F"))))
@@ -136,6 +143,7 @@ func (w *sessionWin) syncMenu() {
 		pCheckMenuItem.Call(w.menu, id, f)
 	}
 	check(idActualSize, w.actualSize)
+	check(idColor444, w.color444)
 	check(idCapture, w.capture)
 	pDrawMenuBar.Call(uintptr(w.hwnd))
 }
@@ -148,18 +156,14 @@ func (w *sessionWin) run(ctx context.Context) {
 	runtime.LockOSThread()
 	defer runtime.UnlockOSThread()
 
-	dec, err := decode.NewH264()
-	if err != nil {
-		dec = nil // o agente manda JPEG
-	}
-	h := &sessionHandler{w: w, dec: dec}
-	defer func() {
-		if h.dec != nil {
-			h.dec.Close()
-		}
-	}()
+	w.mu.Lock()
+	w.can = probeDecoders()
+	codecs := w.codecsLocked()
+	w.mu.Unlock()
+	h := &sessionHandler{w: w, vids: map[byte]decode.Video{}, errs: map[byte]int{}}
+	defer h.closeAll()
 
-	s, err := w.app.api.Dial(ctx, w.machine.ID, dec != nil, w.preset)
+	s, err := w.app.api.Dial(ctx, w.machine.ID, codecs, w.preset)
 	if err != nil {
 		if errors.Is(err, client.ErrUnauthorized) {
 			post(w.app.main, wmLoggedOut)
@@ -213,27 +217,113 @@ func (w *sessionWin) setStatus(s string) {
 	post(w.hwnd, wmStatus)
 }
 
+// decoders diz o que este PC decodifica.
+type decoders struct{ h264, av1 bool }
+
+// probeDecoders abre e fecha cada decodificador do Windows: H.264 vem com o
+// sistema (falta no Windows N sem o Media Feature Pack) e AV1 vem da
+// "Extensão de Vídeo AV1" da Microsoft Store.
+func probeDecoders() decoders {
+	var d decoders
+	if v, err := decode.NewH264(); err == nil {
+		v.Close()
+		d.h264 = true
+	}
+	if v, err := decode.NewAV1(); err == nil {
+		v.Close()
+		d.av1 = true
+	}
+	return d
+}
+
+// codecsLocked monta o hello com o que o PC decodifica, a escolha do menu e
+// sem os codecs que falharam. Chame com w.mu travado.
+func (w *sessionWin) codecsLocked() []string {
+	var out []string
+	for _, c := range client.Codecs(w.can.h264, w.can.av1, w.color444) {
+		if !w.broken[c] {
+			out = append(out, c)
+		}
+	}
+	return out
+}
+
+// resendCodecs manda ao agente a lista atual: ele reabre a captura com o
+// primeiro codec que conseguir.
+func (w *sessionWin) resendCodecs() {
+	w.mu.Lock()
+	codecs := w.codecsLocked()
+	w.mu.Unlock()
+	w.send(func(s *client.Session) { s.SetCodecs(codecs) })
+}
+
+// sessionHandler decodifica os quadros na goroutine de [sessionWin.run].
 type sessionHandler struct {
-	w   *sessionWin
-	dec decode.H264
+	w    *sessionWin
+	vids map[byte]decode.Video // um decodificador por codec, aberto no primeiro quadro
+	errs map[byte]int          // falhas seguidas por codec
+	last byte                  // codec do último quadro de vídeo
+}
+
+// codecNames liga o código do quadro ao nome do hello e ao construtor.
+var codecNames = map[byte]struct {
+	name string
+	open func() (decode.Video, error)
+}{
+	protocol.CodecH264:   {protocol.CodecNameH264, decode.NewH264},
+	protocol.CodecAVC444: {protocol.CodecNameAVC444, decode.NewAVC444},
+	protocol.CodecAV1:    {protocol.CodecNameAV1, decode.NewAV1},
+}
+
+// maxDecodeErrors é quantas falhas seguidas tiram um codec do hello. Uma
+// falha isolada (quadro perdido) só reinicia o decodificador e pede keyframe.
+const maxDecodeErrors = 3
+
+func (h *sessionHandler) closeAll() {
+	for _, v := range h.vids {
+		v.Close()
+	}
+}
+
+// fail descarta o decodificador do codec e pede um keyframe; na terceira
+// falha seguida, desiste do codec e avisa o agente para trocar.
+func (h *sessionHandler) fail(codec byte) {
+	if v := h.vids[codec]; v != nil {
+		v.Close()
+		delete(h.vids, codec)
+	}
+	h.errs[codec]++
+	if h.errs[codec] >= maxDecodeErrors {
+		h.w.mu.Lock()
+		h.w.broken[codecNames[codec].name] = true
+		h.w.mu.Unlock()
+		h.w.resendCodecs()
+		return
+	}
+	h.w.send(func(s *client.Session) { s.Keyframe() })
 }
 
 func (h *sessionHandler) Frame(hd protocol.FrameHeader, payload []byte) {
 	var f *decode.Frame
 	var err error
-	switch hd.Codec {
-	case protocol.CodecH264:
-		if h.dec == nil {
+	if c, ok := codecNames[hd.Codec]; ok {
+		h.last = hd.Codec
+		v := h.vids[hd.Codec]
+		if v == nil {
+			if v, err = c.open(); err != nil {
+				h.fail(hd.Codec)
+				return
+			}
+			h.vids[hd.Codec] = v
+		}
+		if f, err = v.Decode(payload, int(hd.W), int(hd.H)); err != nil {
+			h.fail(hd.Codec)
 			return
 		}
-		f, err = h.dec.Decode(payload, int(hd.W), int(hd.H))
-		if err != nil { // decodificador perdido: recomeça de um keyframe
-			h.dec.Close()
-			h.dec, _ = decode.NewH264()
-			h.w.send(func(s *client.Session) { s.Keyframe() })
-			return
+		if f != nil {
+			h.errs[hd.Codec] = 0
 		}
-	default: // JPEG e o refresh de nitidez em PNG
+	} else { // JPEG e o refresh de nitidez em PNG
 		f, err = decode.Image(payload)
 	}
 	if f == nil || err != nil {
@@ -259,7 +349,7 @@ func (h *sessionHandler) Status(t string) {
 
 func (h *sessionHandler) Stats(st protocol.Stats) {
 	gpu := ""
-	if h.dec != nil && h.dec.GPU() && st.Encoder != "" {
+	if v := h.vids[h.last]; v != nil && v.GPU() && st.Encoder != "" {
 		gpu = " · decodificação na GPU"
 	}
 	t := fmt.Sprintf("RemoteIT — %s · %s · %dx%d · %d fps · %.1f Mbps · RTT %d ms%s",
@@ -365,6 +455,11 @@ func (w *sessionWin) command(id int32) {
 		w.preset = client.Presets[id-idPreset0].Value
 		p := w.preset
 		w.send(func(s *client.Session) { s.Preset(p) })
+	case id == idColor444:
+		w.mu.Lock()
+		w.color444 = !w.color444
+		w.mu.Unlock()
+		w.resendCodecs()
 	case id == idActualSize:
 		w.actualSize = !w.actualSize
 		pInvalidateRect.Call(uintptr(w.hwnd), 0, 0)

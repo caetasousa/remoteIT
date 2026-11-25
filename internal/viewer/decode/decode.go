@@ -22,8 +22,9 @@ type Frame struct {
 	BGRA []byte
 }
 
-// H264 decodifica H.264 Annex-B. Use de uma goroutine só.
-type H264 interface {
+// Video decodifica um fluxo de vídeo do agente (H.264, AV1 ou AVC444). Use
+// de uma goroutine só: os decodificadores do Windows ficam presos à thread.
+type Video interface {
 	// Decode devolve um quadro quando sair um (nil, nil enquanto o
 	// decodificador acumula). w e h são os do cabeçalho do protocolo.
 	Decode(data []byte, w, h int) (*Frame, error)
@@ -32,12 +33,49 @@ type H264 interface {
 	Close()
 }
 
-// ErrNoH264 significa que este build ou este PC não decodifica H.264: o
-// visualizador avisa o agente (hello h264=false) e recebe JPEG.
-var ErrNoH264 = errors.New("decode: H.264 indisponível")
+// ErrUnavailable significa que este build ou este PC não decodifica o codec
+// pedido: o visualizador o deixa fora do hello e o agente escolhe outro (no
+// fim, JPEG).
+var ErrUnavailable = errors.New("decode: codec indisponível neste PC")
 
-// NewH264 abre o decodificador H.264 (veja ErrNoH264).
-func NewH264() (H264, error) { return newH264() }
+// nv12Decoder é um decodificador do sistema que devolve NV12 contíguo
+// (plano Y de w*h, depois UV): o Media Foundation no Windows
+// (mf_windows.go), falsos nos testes.
+type nv12Decoder interface {
+	// decodeNV12 devolve nil enquanto não sai quadro. O slice só vale até a
+	// próxima chamada.
+	decodeNV12(data []byte, w, h int) (nv12 []byte, ow, oh int, err error)
+	gpu() bool
+	close()
+}
+
+// Codecs que o sistema decodifica (veja openNV12).
+const (
+	mfH264 = 0
+	mfAV1  = 1
+)
+
+// NewH264 abre o decodificador H.264 (veja ErrUnavailable).
+func NewH264() (Video, error) { return newPlain(mfH264) }
+
+// NewAV1 abre o decodificador AV1. No Windows ele vem da "Extensão de Vídeo
+// AV1" da Microsoft Store; sem ela, devolve ErrUnavailable.
+func NewAV1() (Video, error) { return newPlain(mfAV1) }
+
+// NewAVC444 abre dois decodificadores H.264, um por visão, e recompõe a cor
+// 4:4:4 (veja internal/avc444).
+func NewAVC444() (Video, error) {
+	m, err := openNV12(mfH264)
+	if err != nil {
+		return nil, err
+	}
+	a, err := openNV12(mfH264)
+	if err != nil {
+		m.close()
+		return nil, err
+	}
+	return &avc444Video{main: m, aux: a}, nil
+}
 
 // Image decodifica um quadro JPEG ou PNG.
 func Image(data []byte) (*Frame, error) {

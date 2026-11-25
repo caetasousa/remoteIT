@@ -36,7 +36,7 @@ Todas têm o campo `t` com o tipo. Campos com valor zero são omitidos.
 
 | `t` | Campos | Significado |
 |---|---|---|
-| `hello` | `h264: bool` | o navegador decodifica H.264 (WebCodecs)? Sem `hello` em 1,5 s, o agente assume JPEG |
+| `hello` | `codecs: [..]`, `h264: bool` | o que o técnico decodifica, **em ordem de preferência** (`avc444`, `av1`, `h264`, `jpeg`; veja [abaixo](#codecs)). `h264` é para agentes de antes da negociação. Sem `hello` em 1,5 s, o agente assume JPEG. Um `hello` novo troca de codec sem reconectar |
 | `cfg` | `p: turbo \| balanced \| quality \| quality60` | preset de qualidade ([tabela](FLUXOS.md#video)) |
 | `kf` | | pede keyframe (decoder reiniciado); descarta os quadros em trânsito |
 | `ack` | `s: uint32` | quadro `s` recebido; libera o controle de fluxo |
@@ -74,7 +74,8 @@ Todas têm o campo `t` com o tipo. Campos com valor zero são omitidos.
 
 ```
 offset  tamanho  campo
-0       1        codec: 1 = H.264 (Annex-B), 2 = JPEG, 3 = PNG (refresh)
+0       1        codec: 1 = H.264 (Annex-B), 2 = JPEG, 3 = PNG (refresh),
+                         4 = AVC444 (dois H.264), 5 = AV1 (OBUs)
 1       1        flags: bit 0 = keyframe
 2       2        largura   (big-endian)
 4       2        altura    (big-endian)
@@ -93,15 +94,48 @@ offset  tamanho  campo
 ├───────────────────────────────┼───────────────────────────────┤
 │       sequência (baixo)       │          reservado            │
 ├───────────────────────────────┴───────────────────────────────┤
-│                 payload (H.264, JPEG ou PNG) ...              │
+│        payload (H.264, AVC444, AV1, JPEG ou PNG) ...          │
 ```
 
 * 🔢 A `sequência` é a mesma que o navegador devolve no `ack`.
-* 🔑 Depois de um `kf`, de trocar de preset ou de reabrir a captura, o próximo quadro H.264 é keyframe.
+* 🔑 Depois de um `kf`, de trocar de preset ou de reabrir a captura, o próximo quadro de vídeo é keyframe.
 * 🔍 **PNG (codec 3) é o refresh de nitidez:** uma imagem sem perda que o agente manda **uma vez** quando a
   tela fica parada por 300 ms ([ADR 0009](adr/0009-refresh-de-nitidez.md)). Não é vídeo: o navegador
   só a desenha por cima do último quadro se tiver o mesmo tamanho e se nenhum quadro de vídeo chegou
   enquanto ela era decodificada. Também recebe `ack`, como qualquer quadro.
+* 🎨 **AVC444 (codec 4)** é cor 4:4:4 em dois fluxos H.264 Annex-B independentes, a visão principal e a
+  auxiliar ([ADR 0013](adr/0013-codecs-e-negociacao.md); arranjo dos planos em
+  [`internal/avc444`](../internal/avc444/avc444.go)). Payload:
+
+  ```
+  offset  tamanho  campo
+  0       1        flags: bit 0 = principal é keyframe, bit 1 = auxiliar é keyframe
+  1       4        n = tamanho da principal (big-endian)
+  5       n        H.264 da visão principal (pode ser vazio)
+  5+n     resto    H.264 da visão auxiliar (pode ser vazio)
+  ```
+
+  Uma das partes pode faltar num quadro (o encoder entregou a saída atrasada): o visualizador combina
+  a última de cada uma. O `keyframe` do cabeçalho só vale 1 quando as duas são keyframe.
+* 🪶 **AV1 (codec 5):** OBUs com campo de tamanho ("low overhead"), uma unidade temporal por quadro,
+  como o `EncodedVideoChunk` espera. Todo keyframe traz o cabeçalho de sequência.
+
+<a id="codecs"></a>
+### 🎚️ Negociação de codecs
+
+O técnico manda no `hello` o que decodifica, do preferido ao último recurso. O agente percorre a lista
+e abre o primeiro codec que conseguir; se um falhar na abertura ou no meio da sessão, fica marcado e o
+próximo entra. JPEG fecha sempre a lista.
+
+| Nome | Codec | Quem oferece | O agente usa quando |
+|---|---|---|---|
+| `avc444` | 4 | visualizador nativo com H.264 e **Cor 4:4:4** ligada | há encoder H.264 de GPU e o preset é de resolução nativa |
+| `av1` | 5 | navegador ou visualizador que decodifica AV1 **na GPU** | há encoder AV1 de GPU (RTX 40+, Arc / Core Ultra, RX 7000+) |
+| `h264` | 1 | quem decodifica H.264 | há encoder H.264 (GPU ou o software da Microsoft) |
+| `jpeg` | 2 | todos | sempre |
+
+O técnico também desiste sozinho: três falhas seguidas do decodificador tiram o codec da lista, e um
+`hello` novo faz o agente trocar ([ADR 0013](adr/0013-codecs-e-negociacao.md)).
 
 ---
 
@@ -116,7 +150,7 @@ sequenceDiagram
     A->>R: conecta /ws/agent
     T->>R: conecta /ws/viewer
     R->>A: {"t":"start"}
-    T->>A: {"t":"hello","h264":true}
+    T->>A: {"t":"hello","codecs":["av1","h264","jpeg"],"h264":true}
     T->>A: {"t":"cfg","p":"quality"}
     A->>T: {"t":"waiting"}
     Note over A: usuário clica Sim

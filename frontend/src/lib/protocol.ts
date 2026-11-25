@@ -5,6 +5,13 @@ export const CODEC_H264 = 1;
 export const CODEC_JPEG = 2;
 /** Imagem PNG sem perda enviada quando a tela fica parada (refresh de nitidez). */
 export const CODEC_PNG = 3;
+/** Cor 4:4:4 em dois fluxos H.264: só o visualizador nativo decodifica. */
+export const CODEC_AVC444 = 4;
+/** AV1 em OBUs com tamanho ("low overhead"), uma unidade temporal por quadro. */
+export const CODEC_AV1 = 5;
+
+/** Nomes dos codecs no hello, em ordem de preferência. */
+export type CodecName = 'avc444' | 'av1' | 'h264' | 'jpeg';
 
 /** Cabeçalho de 12 bytes (big-endian) de todo quadro binário de vídeo. */
 export interface FrameHeader {
@@ -31,7 +38,8 @@ export function parseFrame(buf: ArrayBuffer): { header: FrameHeader; data: Uint8
 
 /** Mensagens do técnico para o agente. */
 export type ClientMessage =
-  | { t: 'hello'; h264: boolean }
+  // codecs em ordem de preferência; h264 é para agentes de antes da negociação
+  | { t: 'hello'; h264: boolean; codecs: CodecName[] }
   | { t: 'cfg'; p: Preset }
   | { t: 'kf' }
   | { t: 'ack'; s: number }

@@ -5,6 +5,7 @@ import (
 	"errors"
 	"log/slog"
 	"runtime"
+	"slices"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -21,7 +22,7 @@ type Stream struct {
 	logger *slog.Logger
 	flow   FlowControl
 
-	h264    atomic.Bool
+	codecs  atomic.Value // []string: o que o técnico decodifica, em ordem de preferência
 	hello   chan struct{}
 	helloMu sync.Once
 	wantKey atomic.Bool
@@ -30,24 +31,29 @@ type Stream struct {
 
 	// Estado que sobrevive à troca da thread de captura (veja Run). Só uma
 	// goroutine de captura roda por vez; o canal entre elas ordena o acesso.
-	noH264     bool
+	failed     map[string]bool // codecs que falharam nesta máquina: não tenta de novo
+	cur        string          // codec da fonte aberta
 	blocked    bool
 	lastFollow string
 }
 
 // NewStream cria uma transmissão que envia por send usando os encoders enc.
 func NewStream(enc Encoders, send Sender, logger *slog.Logger) *Stream {
-	s := &Stream{enc: enc, send: send, logger: logger, hello: make(chan struct{}), reconf: make(chan struct{}, 1)}
+	s := &Stream{enc: enc, send: send, logger: logger, hello: make(chan struct{}), reconf: make(chan struct{}, 1),
+		failed: map[string]bool{}}
 	s.preset.Store(DefaultPreset)
+	s.codecs.Store([]string{protocol.CodecNameJPEG})
 	return s
 }
 
-// OnHello registra se o navegador decodifica H.264. Mudar de ideia reabre a
-// fonte com o outro codec.
-func (s *Stream) OnHello(h264 bool) {
-	old := s.h264.Swap(h264)
+// OnHello registra os codecs que o técnico decodifica, em ordem de
+// preferência (veja protocol.Message.Accepts). Um hello diferente do
+// anterior reabre a fonte: é assim que o técnico troca de codec, ou desiste
+// de um que o decodificador dele não aguentou.
+func (s *Stream) OnHello(codecs []string) {
+	old := s.codecs.Swap(slices.Clone(codecs)).([]string)
 	s.helloMu.Do(func() { close(s.hello) })
-	if old != h264 {
+	if !slices.Equal(old, codecs) {
 		s.kick()
 	}
 }
@@ -86,7 +92,7 @@ func (s *Stream) status(t string) { s.send.SendJSON(protocol.Message{T: t}) }
 // thread que já tem janelas, e o encoder H.264 cria janelas ocultas. Nesse
 // caso a thread é descartada e a captura recomeça numa thread nova, limpa.
 func (s *Stream) Run(ctx context.Context) {
-	select { // espera o navegador dizer se decodifica H.264
+	select { // espera o técnico dizer o que decodifica
 	case <-s.hello:
 	case <-time.After(1500 * time.Millisecond):
 	case <-ctx.Done():
@@ -156,24 +162,22 @@ func (s *Stream) capture(ctx context.Context) bool {
 		}
 		p = Presets[s.preset.Load().(string)]
 		kbps = (p.MinKbps + p.MaxKbps) / 2
-		if s.h264.Load() && !s.noH264 && s.enc.H264 != nil {
-			v, err := s.enc.H264(p.MaxW, p.FPS, kbps)
+		for _, name := range s.codecs.Load().([]string) {
+			v, err := s.openCodec(name, p, kbps)
+			if v == nil && err == nil {
+				continue // não existe neste build ou não serve para este preset
+			}
 			if err == nil {
-				src = v
+				src, s.cur = v, name
 				return nil
 			}
-			if errors.Is(err, ErrReopen) {
-				return err
+			if errors.Is(err, ErrReopen) || name == protocol.CodecNameJPEG {
+				return err // JPEG é a última saída: nunca fica marcado como falho
 			}
-			s.logger.Info("H.264 indisponível, usando JPEG", "err", err)
-			s.noH264 = true
+			s.logger.Info("codec indisponível, tentando o próximo", "codec", name, "err", err)
+			s.failed[name] = true
 		}
-		v, err := s.enc.JPEG(p.MaxW, kbps)
-		if err != nil {
-			return err
-		}
-		src = v
-		return nil
+		return errors.New("nenhum codec disponível")
 	}
 
 	for ctx.Err() == nil {
@@ -257,9 +261,9 @@ func (s *Stream) capture(ctx context.Context) bool {
 			if err != nil {
 				src.Close()
 				src = nil
-				if !errors.Is(err, ErrReopen) {
-					s.logger.Info("erro na captura, caindo para JPEG", "err", err)
-					s.noH264 = true
+				if !errors.Is(err, ErrReopen) && s.cur != protocol.CodecNameJPEG {
+					s.logger.Info("erro no encoder, trocando de codec", "codec", s.cur, "err", err)
+					s.failed[s.cur] = true
 				}
 				continue
 			}
@@ -307,6 +311,34 @@ func (s *Stream) capture(ctx context.Context) bool {
 		}
 	}
 	return false
+}
+
+// openCodec abre a fonte de um codec. (nil, nil) quer dizer "pule este":
+// o build não tem o encoder, ele já falhou antes ou não serve para o preset.
+func (s *Stream) openCodec(name string, p Preset, kbps int) (Source, error) {
+	if s.failed[name] {
+		return nil, nil
+	}
+	switch name {
+	case protocol.CodecNameAVC444:
+		// sem redução de resolução: o 4:4:4 é para ler texto na tela nativa
+		if s.enc.AVC444 != nil && p.MaxW == 0 {
+			return s.enc.AVC444(p.FPS, kbps)
+		}
+	case protocol.CodecNameAV1:
+		if s.enc.AV1 != nil {
+			return s.enc.AV1(p.MaxW, p.FPS, kbps)
+		}
+	case protocol.CodecNameH264:
+		if s.enc.H264 != nil {
+			return s.enc.H264(p.MaxW, p.FPS, kbps)
+		}
+	case protocol.CodecNameJPEG:
+		if s.enc.JPEG != nil {
+			return s.enc.JPEG(p.MaxW, kbps)
+		}
+	}
+	return nil, nil
 }
 
 func sleepCtx(ctx context.Context, d time.Duration) bool {

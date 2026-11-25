@@ -1,11 +1,14 @@
-// rcdec.h: decodificador H.264 do visualizador nativo (Windows).
+// rcdec.h: decodificador de vídeo do visualizador nativo (Windows).
 //
-// Usa o decodificador H.264 do próprio Windows (Media Foundation, MFT
-// síncrono). Com uma placa de vídeo compatível, liga o DXVA (decodificação
-// na GPU) passando um dispositivo D3D11; sem ela, o mesmo MFT decodifica na
-// CPU. A saída NV12 é convertida para BGRA (BT.709, faixa 16-235, a mesma do
-// encoder do agente em internal/agent/media/h264/rcenc.h) para a janela
-// desenhar com GDI.
+// Usa os decodificadores do próprio Windows (Media Foundation, MFT
+// síncrono): H.264, que vem com o sistema, e AV1, que vem da "Extensão de
+// Vídeo AV1" da Microsoft Store (já instalada na maioria dos Windows 11).
+// Com uma placa de vídeo compatível, liga o DXVA (decodificação na GPU)
+// passando um dispositivo D3D11; sem ela, o mesmo MFT decodifica na CPU.
+//
+// A saída é NV12 recortado no tamanho visível e contíguo (plano Y, depois UV):
+// a conversão para BGRA fica em yuv.h, porque o AVC444 precisa dos planos
+// crus das duas visões para recompor a cor (veja internal/avc444).
 #define COBJMACROS
 #define WIN32_LEAN_AND_MEAN
 #include <windows.h>
@@ -20,6 +23,13 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include "yuv.h"
+
+// AV1 ainda não está nos cabeçalhos do mingw: FOURCC 'AV01'.
+static const GUID rdFormatAV1 = {0x31305641, 0x0000, 0x0010, {0x80, 0x00, 0x00, 0xaa, 0x00, 0x38, 0x9b, 0x71}};
+
+#define RD_H264 0
+#define RD_AV1  1
 
 typedef HRESULT (WINAPI *pfnMFStartup)(ULONG, DWORD);
 typedef HRESULT (WINAPI *pfnMFCreateMediaType)(IMFMediaType **);
@@ -61,8 +71,8 @@ typedef struct {
 	UINT32 w, h;     // tamanho NV12 do decodificador (pode ter altura alinhada, ex. 1088)
 	LONG stride;
 	IMFSample *out_sample; // reaproveitada no modo CPU
-	uint8_t *bgra;
-	int bgra_cap;
+	uint8_t *nv12;         // último quadro, NV12 recortado e contíguo
+	int nv12_cap;
 	LONGLONG ts;
 } rd_ctx;
 
@@ -143,11 +153,12 @@ void rd_close(rd_ctx *c) {
 	}
 	if (c->mgr) IMFDXGIDeviceManager_Release(c->mgr);
 	if (c->dev) ID3D11Device_Release(c->dev);
-	free(c->bgra);
+	free(c->nv12);
 	free(c);
 }
 
-int rd_open(rd_ctx **out, int allow_hw, char *err, int errlen) {
+int rd_open(rd_ctx **out, int codec, int allow_hw, char *err, int errlen) {
+	const GUID *sub = codec == RD_AV1 ? &rdFormatAV1 : &MFVideoFormat_H264;
 	*out = NULL;
 	if (rd_load() != 1) {
 		snprintf(err, errlen, "Media Foundation indisponível");
@@ -158,11 +169,11 @@ int rd_open(rd_ctx **out, int allow_hw, char *err, int errlen) {
 	if (FAILED(hr = dMFStartup(MF_VERSION, MFSTARTUP_LITE))) { rd_err(err, errlen, "MFStartup", hr); return RD_ERR; }
 
 	rd_ctx *c = calloc(1, sizeof(rd_ctx));
-	MFT_REGISTER_TYPE_INFO in = {MFMediaType_Video, MFVideoFormat_H264};
+	MFT_REGISTER_TYPE_INFO in = {MFMediaType_Video, *sub};
 	IMFActivate **acts = NULL;
 	UINT32 n = 0;
 	hr = dMFTEnumEx(MFT_CATEGORY_VIDEO_DECODER, MFT_ENUM_FLAG_SYNCMFT | MFT_ENUM_FLAG_SORTANDFILTER, &in, NULL, &acts, &n);
-	if (FAILED(hr) || n == 0) { rd_err(err, errlen, "MFTEnumEx (sem decodificador H.264)", hr); free(c); return RD_ERR; }
+	if (FAILED(hr) || n == 0) { rd_err(err, errlen, codec == RD_AV1 ? "MFTEnumEx (sem decodificador AV1)" : "MFTEnumEx (sem decodificador H.264)", hr); free(c); return RD_ERR; }
 	hr = IMFActivate_ActivateObject(acts[0], &IID_IMFTransform, (void **)&c->mft);
 	for (UINT32 i = 0; i < n; i++) IMFActivate_Release(acts[i]);
 	CoTaskMemFree(acts);
@@ -178,7 +189,7 @@ int rd_open(rd_ctx **out, int allow_hw, char *err, int errlen) {
 	IMFMediaType *t = NULL;
 	dMFCreateMediaType(&t);
 	IMFMediaType_SetGUID(t, &MF_MT_MAJOR_TYPE, &MFMediaType_Video);
-	IMFMediaType_SetGUID(t, &MF_MT_SUBTYPE, &MFVideoFormat_H264);
+	IMFMediaType_SetGUID(t, &MF_MT_SUBTYPE, sub);
 	IMFMediaType_SetUINT32(t, &MF_MT_INTERLACE_MODE, MFVideoInterlace_Progressive);
 	hr = IMFTransform_SetInputType(c->mft, 0, t, 0);
 	IMFMediaType_Release(t);
@@ -192,26 +203,13 @@ int rd_open(rd_ctx **out, int allow_hw, char *err, int errlen) {
 
 int rd_is_hw(rd_ctx *c) { return c->hw; }
 
-static inline uint8_t clamp8(int v) { return v < 0 ? 0 : v > 255 ? 255 : (uint8_t)v; }
-
-// nv12_to_bgra recorta w x h do quadro (o decodificador pode alinhar a altura)
-// e converte com BT.709 faixa limitada, em ponto fixo (x1024).
-static void nv12_to_bgra(const uint8_t *src, LONG pitch, UINT32 plane_h, int w, int h, uint8_t *dst) {
+// nv12_crop copia w x h (pares) de um NV12 com pitch e altura de plano
+// plane_h para dst, contíguo.
+static void nv12_crop(const uint8_t *src, LONG pitch, UINT32 plane_h, int w, int h, uint8_t *dst) {
+	for (int y = 0; y < h; y++) memcpy(dst + (size_t)w * y, src + (size_t)pitch * y, w);
 	const uint8_t *uv = src + (size_t)pitch * plane_h;
-	for (int y = 0; y < h; y++) {
-		const uint8_t *yr = src + (size_t)pitch * y;
-		const uint8_t *cr = uv + (size_t)pitch * (y / 2);
-		uint8_t *o = dst + (size_t)w * 4 * y;
-		for (int x = 0; x < w; x++) {
-			int Y = 1192 * (yr[x] - 16);
-			int U = cr[x & ~1] - 128, V = cr[(x & ~1) + 1] - 128;
-			o[0] = clamp8((Y + 2163 * U) >> 10);
-			o[1] = clamp8((Y - 218 * U - 546 * V) >> 10);
-			o[2] = clamp8((Y + 1836 * V) >> 10);
-			o[3] = 255;
-			o += 4;
-		}
-	}
+	dst += (size_t)w * h;
+	for (int y = 0; y < h / 2; y++) memcpy(dst + (size_t)w * y, uv + (size_t)pitch * y, w);
 }
 
 static int rd_copy_out(rd_ctx *c, IMFSample *s, int w, int h) {
@@ -219,12 +217,14 @@ static int rd_copy_out(rd_ctx *c, IMFSample *s, int w, int h) {
 	if (FAILED(IMFSample_GetBufferByIndex(s, 0, &b))) return RD_NONE;
 	if (w <= 0 || w > (int)c->w) w = (int)c->w;
 	if (h <= 0 || h > (int)c->h) h = (int)c->h;
-	int need = w * h * 4;
-	if (need > c->bgra_cap) {
-		free(c->bgra);
-		c->bgra = malloc(need);
-		c->bgra_cap = c->bgra ? need : 0;
-		if (!c->bgra) { IMFMediaBuffer_Release(b); return RD_ERR; }
+	w &= ~1;
+	h &= ~1;
+	int need = w * h * 3 / 2;
+	if (need > c->nv12_cap) {
+		free(c->nv12);
+		c->nv12 = malloc(need);
+		c->nv12_cap = c->nv12 ? need : 0;
+		if (!c->nv12) { IMFMediaBuffer_Release(b); return RD_ERR; }
 	}
 	int ok = RD_NONE;
 	IMF2DBuffer *b2 = NULL;
@@ -234,13 +234,13 @@ static int rd_copy_out(rd_ctx *c, IMFSample *s, int w, int h) {
 	// a superfície para a memória ao travar
 	if (SUCCEEDED(IMFMediaBuffer_QueryInterface(b, &IID_IMF2DBuffer, (void **)&b2)) &&
 		SUCCEEDED(IMF2DBuffer_Lock2D(b2, &p, &pitch))) {
-		if (pitch > 0) { nv12_to_bgra(p, pitch, c->h, w, h, c->bgra); ok = RD_FRAME; }
+		if (pitch >= w) { nv12_crop(p, pitch, c->h, w, h, c->nv12); ok = RD_FRAME; }
 		IMF2DBuffer_Unlock2D(b2);
 	} else {
 		DWORD len = 0;
 		if (SUCCEEDED(IMFMediaBuffer_Lock(b, &p, NULL, &len))) {
 			LONG st = c->stride > 0 ? c->stride : (LONG)c->w;
-			if (len >= (DWORD)(st * c->h * 3 / 2)) { nv12_to_bgra(p, st, c->h, w, h, c->bgra); ok = RD_FRAME; }
+			if (st >= w && len >= (DWORD)(st * c->h * 3 / 2)) { nv12_crop(p, st, c->h, w, h, c->nv12); ok = RD_FRAME; }
 			IMFMediaBuffer_Unlock(b);
 		}
 	}
@@ -280,9 +280,10 @@ static int rd_drain(rd_ctx *c, int w, int h) {
 	}
 }
 
-// rd_decode entrega um quadro Annex-B e, se sair um quadro decodificado,
-// devolve RD_FRAME com *out apontando para w*h*4 bytes BGRA (válidos até a
-// próxima chamada). w e h são os do cabeçalho do quadro (tamanho visível).
+// rd_decode entrega um quadro (H.264 Annex-B ou unidade temporal AV1) e, se
+// sair um quadro decodificado, devolve RD_FRAME com *out apontando para o
+// NV12 contíguo de *ow x *oh (válido até a próxima chamada). w e h são os do
+// cabeçalho do quadro (tamanho visível).
 int rd_decode(rd_ctx *c, const uint8_t *data, int n, int w, int h, uint8_t **out, int *ow, int *oh) {
 	IMFSample *s = NULL;
 	IMFMediaBuffer *mb = NULL;
@@ -311,9 +312,9 @@ int rd_decode(rd_ctx *c, const uint8_t *data, int n, int w, int h, uint8_t **out
 	if (r == RD_ERR) return RD_ERR;
 	if (r == RD_FRAME) got = RD_FRAME;
 	if (got == RD_FRAME) {
-		*out = c->bgra;
-		*ow = (w > 0 && w <= (int)c->w) ? w : (int)c->w;
-		*oh = (h > 0 && h <= (int)c->h) ? h : (int)c->h;
+		*out = c->nv12;
+		*ow = ((w > 0 && w <= (int)c->w) ? w : (int)c->w) & ~1;
+		*oh = ((h > 0 && h <= (int)c->h) ? h : (int)c->h) & ~1;
 	}
 	return got;
 }

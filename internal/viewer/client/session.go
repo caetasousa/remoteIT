@@ -6,6 +6,7 @@ import (
 	"errors"
 	"net/http"
 	"net/url"
+	"slices"
 	"sync"
 	"time"
 
@@ -17,7 +18,7 @@ import (
 // Handler recebe o que chega do agente. Os métodos são chamados em ordem,
 // de uma goroutine só (a de [Session.Run]).
 type Handler interface {
-	// Frame recebe um quadro (H.264, JPEG ou PNG). O ack é enviado quando
+	// Frame recebe um quadro (H.264, AVC444, AV1, JPEG ou PNG). O ack é enviado quando
 	// Frame retorna: decodifique e desenhe antes de retornar, como o
 	// navegador faz, para o controle de fluxo medir o caminho inteiro.
 	Frame(h protocol.FrameHeader, payload []byte)
@@ -42,9 +43,33 @@ type Session struct {
 	mu sync.Mutex // gorilla/websocket aceita um escritor por vez
 }
 
-// Dial abre a sessão com a máquina id. h264 diz se este visualizador
-// decodifica H.264 (sem isso o agente manda JPEG); preset é o inicial.
-func (a *API) Dial(ctx context.Context, id string, h264 bool, preset string) (*Session, error) {
+// Codecs monta a lista do hello, em ordem de preferência, a partir do que
+// este PC decodifica. O visualizador nativo prefere a cor 4:4:4 (color444
+// ligado, precisa de H.264), depois AV1 (menos banda) e H.264; JPEG sempre
+// fecha a lista.
+func Codecs(h264, av1, color444 bool) []string {
+	var out []string
+	if h264 && color444 {
+		out = append(out, protocol.CodecNameAVC444)
+	}
+	if av1 {
+		out = append(out, protocol.CodecNameAV1)
+	}
+	if h264 {
+		out = append(out, protocol.CodecNameH264)
+	}
+	return append(out, protocol.CodecNameJPEG)
+}
+
+// hello avisa o agente do que este visualizador decodifica. H264 vai junto
+// para agentes de antes da negociação, que só olham esse campo.
+func hello(codecs []string) protocol.Message {
+	return protocol.Message{T: protocol.TypeHello, Codecs: codecs, H264: slices.Contains(codecs, protocol.CodecNameH264)}
+}
+
+// Dial abre a sessão com a máquina id. codecs é a lista de [Codecs] (sem
+// ela o agente manda JPEG); preset é o inicial.
+func (a *API) Dial(ctx context.Context, id string, codecs []string, preset string) (*Session, error) {
 	u := *a.Base
 	u.Scheme = map[string]string{"https": "wss", "http": "ws"}[a.Base.Scheme]
 	u.Path, u.RawQuery = "/ws/viewer", url.Values{"id": {id}}.Encode()
@@ -66,7 +91,7 @@ func (a *API) Dial(ctx context.Context, id string, h264 bool, preset string) (*S
 		return nil, err
 	}
 	s := &Session{c: c}
-	s.send(protocol.Message{T: protocol.TypeHello, H264: h264})
+	s.send(hello(codecs))
 	s.send(protocol.Message{T: protocol.TypeConfig, P: preset})
 	return s, nil
 }
@@ -130,6 +155,10 @@ func (s *Session) Close() error { return s.c.Close() }
 func (s *Session) Preset(p string) error {
 	return s.send(protocol.Message{T: protocol.TypeConfig, P: p})
 }
+
+// SetCodecs troca a lista de codecs sem reconectar: o agente reabre a
+// captura com o primeiro que conseguir.
+func (s *Session) SetCodecs(codecs []string) error { return s.send(hello(codecs)) }
 
 // Keyframe pede um quadro completo (o decodificador foi reiniciado).
 func (s *Session) Keyframe() error { return s.send(protocol.Message{T: protocol.TypeKeyframe}) }

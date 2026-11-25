@@ -12,18 +12,23 @@
 // deste contrato fica em frontend/src/lib/protocol.ts e DEVE ser mantido igual.
 package protocol
 
+import "slices"
+
 // Mensagens enviadas pelo técnico (navegador) ao agente.
 const (
-	TypeHello     = "hello" // H264 informa se o navegador decodifica H.264
-	TypeConfig    = "cfg"   // P escolhe um preset de qualidade
-	TypeKeyframe  = "kf"    // pede keyframe depois de reiniciar o decoder
-	TypeAck       = "ack"   // S confirma o quadro com esse número de sequência
-	TypeMouseMove = "mm"    // X, Y em [0,1] relativos à tela remota
-	TypeMouseDown = "md"    // X, Y e B (0 esquerdo, 1 meio, 2 direito)
-	TypeMouseUp   = "mu"    // X, Y e B
-	TypeWheel     = "wh"    // D em múltiplos de 120 (WHEEL_DELTA do Windows)
-	TypeKeyDown   = "kd"    // Code e Key do KeyboardEvent do navegador
-	TypeKeyUp     = "ku"    // Code e Key
+	// TypeHello diz o que o técnico decodifica: Codecs em ordem de
+	// preferência (veja [Message.Accepts]). H264 é o formato antigo, mantido
+	// para agentes de antes da negociação.
+	TypeHello     = "hello"
+	TypeConfig    = "cfg" // P escolhe um preset de qualidade
+	TypeKeyframe  = "kf"  // pede keyframe depois de reiniciar o decoder
+	TypeAck       = "ack" // S confirma o quadro com esse número de sequência
+	TypeMouseMove = "mm"  // X, Y em [0,1] relativos à tela remota
+	TypeMouseDown = "md"  // X, Y e B (0 esquerdo, 1 meio, 2 direito)
+	TypeMouseUp   = "mu"  // X, Y e B
+	TypeWheel     = "wh"  // D em múltiplos de 120 (WHEEL_DELTA do Windows)
+	TypeKeyDown   = "kd"  // Code e Key do KeyboardEvent do navegador
+	TypeKeyUp     = "ku"  // Code e Key
 	// TypeLock pede para bloquear a estação de trabalho (como Win+L). Não é
 	// um evento de teclado: SendInput não alcança a troca de sessão para a
 	// tela de bloqueio (Winlogon), então o agente chama LockWorkStation
@@ -65,9 +70,11 @@ type Message struct {
 	Code string  `json:"code,omitempty"`
 	Key  string  `json:"key,omitempty"`
 	H264 bool    `json:"h264,omitempty"`
-	S    uint32  `json:"s,omitempty"`
-	P    string  `json:"p,omitempty"`
-	Text string  `json:"text,omitempty"`
+	// Codecs é a lista do hello, em ordem de preferência: CodecName*.
+	Codecs []string `json:"codecs,omitempty"`
+	S      uint32   `json:"s,omitempty"`
+	P      string   `json:"p,omitempty"`
+	Text   string   `json:"text,omitempty"`
 }
 
 // IsInput informa se a mensagem é um evento de mouse ou teclado. O agente só
@@ -78,6 +85,25 @@ func (m Message) IsInput() bool {
 		return true
 	}
 	return false
+}
+
+// Accepts devolve os codecs que um hello aceita, em ordem de preferência. Um
+// hello sem Codecs vem de um técnico de antes da negociação: o campo H264
+// decide entre H.264 e JPEG. JPEG sempre entra no fim, porque todo cliente o
+// decodifica e é a última saída do agente.
+func (m Message) Accepts() []string {
+	var out []string
+	switch {
+	case len(m.Codecs) > 0:
+		for _, c := range m.Codecs {
+			if c != CodecNameJPEG && !slices.Contains(out, c) {
+				out = append(out, c)
+			}
+		}
+	case m.H264:
+		out = append(out, CodecNameH264)
+	}
+	return append(out, CodecNameJPEG)
 }
 
 // Stats descreve o estado do pipeline de vídeo, enviado uma vez por segundo.

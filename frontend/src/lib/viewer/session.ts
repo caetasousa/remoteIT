@@ -3,11 +3,13 @@
 // pela reatividade do Svelte, que só recebe status e estatísticas (1x/s).
 
 import {
+  CODEC_AV1,
   CODEC_H264,
   CODEC_JPEG,
   CODEC_PNG,
   parseFrame,
   type ClientMessage,
+  type CodecName,
   type Preset,
   type ServerMessage,
 } from '../protocol';
@@ -40,15 +42,62 @@ const STATUS: Record<string, [string, StatusLevel]> = {
   secure: ['tela protegida (UAC / bloqueio) — aguardando…', 'warn'],
 };
 
-export async function canDecodeH264(): Promise<boolean> {
-  if (!('VideoDecoder' in window)) return false;
-  try {
-    const r = await VideoDecoder.isConfigSupported({ codec: 'avc1.640033', optimizeForLatency: true });
-    return r.supported === true;
-  } catch {
-    return false;
+type Accel = 'prefer-hardware' | 'no-preference';
+
+/**
+ * Como este navegador decodifica o codec: na GPU, só em software ou não
+ * decodifica (null). No Chromium, 'prefer-hardware' recusa o decodificador
+ * em software, então ele só serve quando a GPU decodifica de fato.
+ */
+async function probe(codec: string): Promise<Accel | null> {
+  if (!('VideoDecoder' in window)) return null;
+  for (const hardwareAcceleration of ['prefer-hardware', 'no-preference'] as const) {
+    try {
+      const r = await VideoDecoder.isConfigSupported({ codec, optimizeForLatency: true, hardwareAcceleration });
+      if (r.supported) return hardwareAcceleration;
+    } catch {
+      // configuração inválida neste navegador: tenta a próxima
+    }
   }
+  return null;
 }
+
+/** H.264 na GPU ou, sem ela (máquina virtual, por exemplo), em software. */
+export const probeH264 = () => probe('avc1.640033');
+
+/**
+ * AV1 só com decodificação na GPU: em software, 4K a 60 fps pesa demais no PC
+ * do técnico, e o H.264 por hardware sai melhor.
+ */
+export async function probeAV1(): Promise<Accel | null> {
+  return (await probe(av1Codec(1920, 1080))) === 'prefer-hardware' ? 'prefer-hardware' : null;
+}
+
+/**
+ * Codec string AV1 (perfil Main, 8 bits). O nível sai do tamanho: 4.0 até
+ * 1080p e 5.1 acima (4K a 60 fps). Os decodificadores olham o fluxo de
+ * verdade; a string só precisa ser aceita.
+ */
+export function av1Codec(w: number, h: number): string {
+  return w * h > 2048 * 1152 ? 'av01.0.13M.08' : 'av01.0.08M.08';
+}
+
+/**
+ * Lista do hello: AV1 primeiro (menos banda com texto), depois H.264; JPEG
+ * fecha a lista. O 4:4:4 (avc444) fica de fora: o WebCodecs não recompõe as
+ * duas visões; isso é coisa do visualizador nativo.
+ */
+export function codecList(h264: boolean, av1: boolean, broken: ReadonlySet<CodecName> = new Set()): CodecName[] {
+  const out: CodecName[] = [];
+  if (av1) out.push('av1');
+  if (h264) out.push('h264');
+  return [...out.filter((c) => !broken.has(c)), 'jpeg'];
+}
+
+/** Falhas seguidas que tiram um codec do hello (uma só reinicia o decodificador). */
+const MAX_DECODE_ERRORS = 3;
+/** Quadros entregues ao decodificador AV1 sem sair imagem nenhuma: ele travou. */
+const MAX_SILENT_CHUNKS = 120;
 
 /** Monta a codec string exata a partir do SPS (perfil/nível reais do encoder). */
 export function codecFromSPS(u: Uint8Array): string | null {
@@ -72,6 +121,11 @@ export class ViewerSession {
   private rendered = 0;
   /** Conta os quadros de vídeo recebidos; o refresh PNG só vale se nenhum chegou depois dele. */
   private videoGen = 0;
+  private can: { h264: Accel | null; av1: Accel | null } = { h264: null, av1: null };
+  /** Codecs que falharam nesta sessão: saem do hello e o agente troca. */
+  private readonly broken = new Set<CodecName>();
+  private errors = 0;
+  private silent = 0;
   private readonly ctx: CanvasRenderingContext2D;
 
   constructor(
@@ -85,12 +139,13 @@ export class ViewerSession {
     this.events.status('conectando…', '');
     this.ctx.fillStyle = '#000';
     this.ctx.fillRect(0, 0, this.canvas.width, this.canvas.height);
-    const h264 = await canDecodeH264();
+    const [h264, av1] = await Promise.all([probeH264(), probeAV1()]);
+    this.can = { h264, av1 };
     const proto = location.protocol === 'https:' ? 'wss' : 'ws';
     const ws = new WebSocket(`${proto}://${location.host}/ws/viewer?id=${encodeURIComponent(agentId)}`);
     ws.binaryType = 'arraybuffer';
     ws.onopen = () => {
-      this.send({ t: 'hello', h264 });
+      this.sendHello();
       this.send({ t: 'cfg', p: preset });
     };
     ws.onmessage = (e) =>
@@ -100,6 +155,11 @@ export class ViewerSession {
       this.resetDecoder();
     };
     this.ws = ws;
+  }
+
+  private sendHello() {
+    const codecs = codecList(this.can.h264 !== null, this.can.av1 !== null, this.broken);
+    this.send({ t: 'hello', h264: codecs.includes('h264'), codecs });
   }
 
   send(m: ClientMessage) {
@@ -145,6 +205,24 @@ export class ViewerSession {
     this.dec = null;
     this.decKey = '';
     this.needKey = true;
+    this.silent = 0;
+  }
+
+  /**
+   * O decodificador falhou: recomeça de um keyframe. Na terceira falha
+   * seguida, desiste do codec e manda um hello sem ele; o agente reabre a
+   * captura com o próximo da lista (AV1 → H.264 → JPEG).
+   */
+  private decoderFailed(codec: CodecName) {
+    this.resetDecoder();
+    if (++this.errors >= MAX_DECODE_ERRORS && codec !== 'jpeg') {
+      console.warn(`decodificador ${codec} falhou ${this.errors} vezes; pedindo outro codec`);
+      this.broken.add(codec);
+      this.errors = 0;
+      this.sendHello();
+      return;
+    }
+    this.requestKeyframe();
   }
 
   private requestKeyframe() {
@@ -203,25 +281,31 @@ export class ViewerSession {
         .catch(() => {});
       return;
     }
-    if (header.codec !== CODEC_H264) return;
+    if (header.codec !== CODEC_H264 && header.codec !== CODEC_AV1) {
+      this.send({ t: 'ack', s: header.seq });
+      return;
+    }
+    const name: CodecName = header.codec === CODEC_AV1 ? 'av1' : 'h264';
 
     if (header.keyframe) {
-      const codec = codecFromSPS(data) ?? 'avc1.640033';
+      const codec = name === 'av1' ? av1Codec(header.w, header.h) : (codecFromSPS(data) ?? 'avc1.640033');
       const key = `${codec}/${header.w}x${header.h}`;
       if (!this.dec || this.dec.state === 'closed' || key !== this.decKey) {
         this.resetDecoder();
         this.dec = new VideoDecoder({
           output: (f) => {
+            this.silent = 0;
+            this.errors = 0;
             this.draw(f, f.displayWidth, f.displayHeight);
             f.close();
           },
           error: (e) => {
             console.warn('decoder:', e);
-            this.resetDecoder();
-            this.requestKeyframe();
+            this.decoderFailed(name);
           },
         });
-        this.dec.configure({ codec, optimizeForLatency: true, hardwareAcceleration: 'prefer-hardware' });
+        const hardwareAcceleration = this.can[name] ?? 'no-preference';
+        this.dec.configure({ codec, optimizeForLatency: true, hardwareAcceleration });
         this.decKey = key;
       }
       this.needKey = false;
@@ -236,8 +320,12 @@ export class ViewerSession {
       this.dec!.decode(new EncodedVideoChunk({ type: header.keyframe ? 'key' : 'delta', timestamp: header.seq, data }));
     } catch (e) {
       console.warn(e);
-      this.resetDecoder();
-      this.requestKeyframe();
+      this.decoderFailed(name);
+      return;
     }
+    // AV1 vem de encoders de GPU recentes, ainda pouco testados com o
+    // WebCodecs: se o decodificador engole quadros sem devolver imagem,
+    // conta como falha (H.264 tem anos de estrada e não precisa disso)
+    if (name === 'av1' && ++this.silent > MAX_SILENT_CHUNKS) this.decoderFailed(name);
   }
 }

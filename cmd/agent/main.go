@@ -42,7 +42,7 @@ import (
 	"remoteit/internal/agent/machine"
 	"remoteit/internal/agent/media"
 	"remoteit/internal/agent/media/capture"
-	"remoteit/internal/agent/media/h264"
+	"remoteit/internal/agent/media/gpu"
 	"remoteit/internal/agent/media/jpeg"
 	"remoteit/internal/agent/relayclient"
 	"remoteit/internal/agent/session"
@@ -103,7 +103,7 @@ func main() {
 		ask = consent.Always
 	}
 	encoders := media.Encoders{
-		H264: h264.New, JPEG: jpeg.New,
+		H264: gpu.NewH264, AVC444: gpu.NewAVC444, AV1: gpu.NewAV1, JPEG: jpeg.New,
 		CursorShape:   capture.CursorShape,
 		FollowDesktop: desktop.FollowInput,
 		// refresh de nitidez: captura GDI sem perda quando a tela para

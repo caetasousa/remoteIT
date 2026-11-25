@@ -33,7 +33,7 @@ Um único binário Go serve **a API** (`/api/...`), **os dois WebSockets** (`/ws
 │ relayclient conexão + backoff ───────┼─ wss ─▶│   ├─ hub       agentes online, 1 técnico│◀─ wss ─┤ viewer/*.ts │
 │ session     start/stop, consent.     │  443   │   ├─ identity  usuários, login, contas  │  443   │ api.ts      │
 │ media       stream, fluxo, bitrate   │        │   └─ audit     registro de acessos      │        └─────────────┘
-│  ├ capture/jpeg/h264                 │        │ storage/postgres ── SQL ──▶ PostgreSQL  │
+│  ├ capture/jpeg/gpu                  │        │ storage/postgres ── SQL ──▶ PostgreSQL  │
 │ input       SendInput (thread fixa)  │        │ mail      SMTP + textos dos e-mails     │
 │ desktop     seguir Default/Winlogon  │        │ server    TLS, shutdown │ web  embed    │
 │ lock        LockWorkStation          │        │                                         │
@@ -48,7 +48,7 @@ Um único binário Go serve **a API** (`/api/...`), **os dois WebSockets** (`/ws
 | 📜 Auditoria | `internal/relay/audit` | registro de acessos | sem registro, sem acesso; acessos órfãos de um reinício são encerrados na partida |
 | 🖥️ Máquinas | `internal/relay/machines` | dono, credencial e códigos de cadastro | dono = quem gerou o código; acessam só o dono e os admins (sem compartilhamento); removida = credencial revogada; legado só para admins |
 | 🎬 Sessão remota | `internal/agent/session` | ciclo de uma transmissão no agente | nada de vídeo, entrada ou bloqueio antes do consentimento |
-| 🎞️ Mídia | `internal/agent/media` (+ `capture`, `jpeg`, `h264`) | captura, encoder, controle de fluxo, bitrate | máx. 2 quadros em trânsito; fallback H.264 → JPEG; thread de captura descartável |
+| 🎞️ Mídia | `internal/agent/media` (+ `capture`, `jpeg`, `gpu`) | captura, encoder, negociação de codec, controle de fluxo, bitrate | máx. 2 quadros em trânsito; codec pela lista do técnico, com fallback até JPEG; thread de captura descartável |
 | ⌨️ Entrada remota | `internal/agent/input` | mouse e teclado | imprimíveis como Unicode; nunca descarta tecla nem clique |
 | 🪟 Desktop | `internal/agent/desktop` | seguir o desktop que recebe entrada | handle por thread do SO |
 | 🔒 Bloqueio | `internal/agent/lock` | bloquear a estação | só a API oficial (`LockWorkStation`) |
@@ -87,7 +87,7 @@ graph TB
 1. 🚪 **`cmd/*` monta tudo e não tem lógica:** lê configuração, cria as dependências e chama `Run`.
 2. 🧱 **Os contextos do relay não se importam entre si:** `hub`, `identity`, `machines` e `audit` são independentes, e só o `httpapi` os combina (o técnico entra → `machines.CanAccess` → `audit.Begin` → `hub.Attach`). `machines` recebe só o ID do usuário e se ele é admin (`machines.Actor`), sem importar `identity`.
 3. 🔗 **A persistência fica atrás de interfaces definidas por quem as usa** (`identity.Repository`, `identity.AccountRepository`, `identity.Mailer`, `audit.Store`), não por quem as implementa.
-4. 🎞️ **`media` não conhece as fontes concretas:** recebe fábricas em `media.Encoders` (inclusive `FollowDesktop`). Por isso o pipeline compila e é testado no Linux, e o H.264 com cgo fica isolado em `media/h264`. `media` não importa pacotes irmãos do agente.
+4. 🎞️ **`media` não conhece as fontes concretas:** recebe fábricas em `media.Encoders` (inclusive `FollowDesktop`). Por isso o pipeline compila e é testado no Linux, e os encoders de GPU com cgo (H.264, AVC444, AV1) ficam isolados em `media/gpu`. `media` não importa pacotes irmãos do agente.
 5. 🪟 **Código de plataforma fica em `_windows.go` / `_other.go`** dentro do pacote dono do assunto. Fora do Windows, os `_other.go` são stubs (o agente Linux da E2E usa uma tela sintética).
 
 ---
@@ -101,7 +101,8 @@ cmd/
 ├── signupdate/main.go               🔑 chave de atualização e update.json assinado (usado pelo build.sh)
 └── viewer/                          🖥️ visualizador nativo do técnico (remoteit-tecnico.exe)
 internal/
-├── protocol/                        📡 Message, Stats, CursorPos, AppendFrame/ParseFrame (12 bytes)
+├── protocol/                        📡 Message (+ Accepts), Stats, CursorPos, AppendFrame/ParseFrame (12 bytes), AppendAVC444
+├── avc444/                          🎨 referência do 4:4:4 em duas visões 4:2:0 (Pack/Combine), seguida pelo shader e pelo visualizador
 ├── agent/
 │   ├── lifecycle/
 │   │   ├── lifecycle.go             modos: Portable, Worker, Handled
@@ -120,7 +121,7 @@ internal/
 │   │   ├── stream.go                Run: hello, thread de captura descartável, laço de quadros, stats
 │   │   ├── capture/                 GDI BitBlt + formato do cursor
 │   │   ├── jpeg/                    Source JPEG
-│   │   └── h264/                    Source H.264: rcenc.h (DXGI + D3D11 + Media Foundation, em C)
+│   │   └── gpu/                     H.264, AVC444 e AV1: rcenc.h (DXGI + D3D11 + Media Foundation, em C); obu.go
 │   ├── input/                       SendInput numa thread fixa; keymap.go (code → virtual-key)
 │   ├── desktop/                     FollowInput: OpenInputDesktop + SetThreadDesktop, handle por thread
 │   └── lock/                        Station: LockWorkStation
@@ -137,7 +138,7 @@ internal/
     └── web/                         embed do build do console (dist/)
 internal/viewer/
 ├── client/                          API e protocolo do técnico, sem Windows (testado no Linux)
-├── decode/                          H.264 via Media Foundation (rcdec.h, GPU/CPU) e JPEG/PNG → BGRA
+├── decode/                          H.264, AVC444 e AV1 via Media Foundation (rcdec.h, GPU/CPU); yuv.h; JPEG/PNG → BGRA
 └── win/                             Win32: login, lista, janela de sessão, GDI, hook de teclado
 frontend/src/
 ├── App.svelte                       🧭 roteamento por hash e abas
@@ -255,3 +256,4 @@ técnico clica Conectar
 | [0010](adr/0010-maquinas-por-tecnico.md) | Máquinas por técnico, com credencial por máquina |
 | [0011](adr/0011-atualizacao-automatica.md) | Atualização automática do agente, com assinatura própria |
 | [0012](adr/0012-visualizador-nativo.md) | Visualizador nativo para Windows, junto com o console |
+| [0013](adr/0013-codecs-e-negociacao.md) | Codecs por negociação: H.264 de base, AVC444 (4:4:4) e AV1 opcional |

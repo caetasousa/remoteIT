@@ -76,7 +76,9 @@ func TestNativeViewerClient(t *testing.T) {
 		t.Fatalf("máquinas = %+v, %v", list, err)
 	}
 
-	s, err := api.Dial(ctx, "pc1", false, "quality")
+	// o visualizador oferece 4:4:4, AV1 e H.264; o agente de teste só tem
+	// JPEG e precisa cair nele sem travar a negociação
+	s, err := api.Dial(ctx, "pc1", viewer.Codecs(true, true, true), "quality")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -120,7 +122,7 @@ func TestNativeViewerClient(t *testing.T) {
 	if l, _ := bia.Machines(ctx); len(l) != 0 {
 		t.Errorf("bia vê máquinas alheias: %+v", l)
 	}
-	if _, err := bia.Dial(ctx, "pc1", true, "quality"); err == nil {
+	if _, err := bia.Dial(ctx, "pc1", viewer.Codecs(true, false, false), "quality"); err == nil {
 		t.Error("bia abriu a tela de uma máquina que não é dela")
 	}
 

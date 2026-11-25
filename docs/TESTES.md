@@ -25,7 +25,8 @@ possível as dependências são reais (banco, relay, WebSocket, agente). Motivo:
 
 | Pacote | O que fixa |
 | --- | --- |
-| `protocol` | Cabeçalho binário: codificar e decodificar de volta e o layout byte a byte |
+| `protocol` | Cabeçalho binário: codificar e decodificar de volta e o layout byte a byte; payload AVC444 (layout e truncado); `Accepts` lê o hello novo e o antigo e fecha com JPEG |
+| `avc444` | ida e volta das duas visões sem compressão erra no máximo 2 níveis; só a principal perde cor; branco fica sem cor |
 | `relay/hub` | Substituição de conexão, técnico novo assume, `stop` só do técnico atual, repasse, derrubar máquina removida |
 | `protocol` (atualização) | assinatura recusada com outra chave, outro `.exe`, outra versão, outra edição ou sem chave |
 | `relay/agentbin` | Gravar o código no espaço reservado do `.exe`; recusar binário sem espaço, com dois espaços ou código inválido |
@@ -34,8 +35,10 @@ possível as dependências são reais (banco, relay, WebSocket, agente). Motivo:
 | `relay/httpapi` | Limite por IP e agrupamento de IPv6; limite de login conta só falhas, por IP e por usuário |
 | `relay/mail` | Validação da configuração SMTP |
 | `protocol` (teclas) | toda tecla que o agente injeta volta ao mesmo nome no visualizador (`KeyToVK` ↔ `CodeForVK`) |
-| `viewer/decode` | JPEG e PNG viram BGRA com as cores certas |
-| `agent/media` | Bitrate adaptativo; controle de fluxo (limite em trânsito, quadro lento, ACK perdido, ACK falso); **a captura troca de thread quando o desktop não pode ser seguido e volta a transmitir** (`TestStreamRecoversWhenDesktopCanBeFollowedAgain`) |
+| `viewer/decode` | JPEG e PNG viram BGRA com as cores certas; **a recomposição 4:4:4 em C (`yuv.h`) bate byte a byte com a referência em Go**; o AVC444 guarda a última visão de cada fluxo e usa só a principal enquanto a auxiliar não chega |
+| `viewer/client` | ordem dos codecs do hello (4:4:4 só com H.264); o hello mantém o campo `h264` para agentes antigos |
+| `agent/media/gpu` | AV1: o cabeçalho de sequência entra depois do delimitador temporal e nunca em dobro; extração do `av1C`; OBUs com extensão e tamanho longo |
+| `agent/media` | Bitrate adaptativo; controle de fluxo (limite em trânsito, quadro lento, ACK perdido, ACK falso); **a captura troca de thread quando o desktop não pode ser seguido e volta a transmitir** (`TestStreamRecoversWhenDesktopCanBeFollowedAgain`); **negociação de codecs**: segue a ordem do técnico, pula o 4:4:4 com resolução reduzida, cai para o próximo quando um encoder não abre ou quebra no meio, e troca com um hello novo (`codec_test.go`) |
 | `agent/input` | Tabela `KeyboardEvent.code` → virtual-key |
 
 ## 🐘 Integração: as partes juntas, de verdade
@@ -49,7 +52,7 @@ cria um relay completo com `httptest` sobre o banco limpo (`newEnv`).
 | `accounts_test.go` | com Mailpit real: cadastro e aprovação, primeiro admin por e-mail, campos injetados, link vencido, reusado e concorrente, recuperação derruba sessão e tela, vínculo de e-mail, limites, migração de banco existente |
 | `agent_test.go` | agente real transmite JPEG válido 640x360 e envia stats, consentimento negado → nenhum quadro, **sem ACK no máximo 2 quadros** e retomada após ACK, **input só depois do consentimento**, **bloquear a tela só depois do consentimento** (`TestLockOnlyAfterConsent`) |
 | `machines_test.go` | **o binário real do agente, baixado pelo técnico, se cadastra sozinho e só aparece para a dona e os admins**, e reusa a identidade ao rodar de novo (`TestDownloadedAgentBelongsToItsTechnician`); credencial errada → 401, legado não usa ID `m_`, remover derruba e dá 403; link de instalação público com limite de máquinas, revogação e a versão sem prazo e sem limite; limite de login; cabeçalhos de segurança; acessos órfãos encerrados na partida |
-| `viewer_test.go` | o **cliente do visualizador nativo** contra relay e agente reais: login, sessão guardada, lista, mais de 2 quadros (os acks voltam), mouse, teclado e área de transferência chegando ao agente, técnico sem acesso, logout |
+| `viewer_test.go` | o **cliente do visualizador nativo** contra relay e agente reais: login, sessão guardada, lista, o hello com 4:4:4, AV1 e H.264 cai em JPEG num agente sem eles, mais de 2 quadros (os acks voltam), mouse, teclado e área de transferência chegando ao agente, técnico sem acesso, logout |
 | `update_test.go` | com a ferramenta de assinatura real: o agente recebe exatamente o `.exe` publicado; mesma versão não faz nada; técnico conectado adia; legado não atualiza; `.exe` trocado, manifesto reescrito ou chave de outro projeto são recusados; a versão aparece no console |
 | `storage_test.go` | migrations idempotentes, auditoria sobrevive à remoção do usuário, sessão vencida rejeitada, admin inicial só com banco vazio |
 
@@ -82,9 +85,21 @@ Os testes rodam no Linux, então nada abaixo é exercitado automaticamente: `Sen
 
 Para a janela do visualizador há um teste de fumaça no Wine (container com Xvfb e `xdotool`: login, lista, sessão e vídeo). Ele não cobre o Media Foundation, o hook de teclado nem o DPAPI.
 
+**Shaders do 4:4:4 no Wine:** `TestAVC444ShadersMatchReference` (em `internal/agent/media/gpu`, só Windows) compila o HLSL de `rcenc.h` e compara as duas visões com `avc444.Pack`. Roda no Windows e no Wine:
+
+```bash
+CGO_ENABLED=1 GOOS=windows CC="zig cc -target x86_64-windows-gnu" CGO_CFLAGS="-O2 -Wno-missing-braces" \
+  go test -c -o gpu.test.exe ./internal/agent/media/gpu/
+docker run --rm -v "$PWD":/w remoteit-wine bash -c \
+  'Xvfb :9 & export DISPLAY=:9 WINEDEBUG=-all; sleep 2; wine /w/gpu.test.exe -test.v'
+```
+
+Ele cobre a matemática dos shaders, não o desenho direto nos planos NV12 nem os encoders (só com GPU de verdade).
+
 **▶️ Portátil (`suporte-ti.exe`)**
 
-- [ ] `build.sh` com Zig: a barra mostra `H.264 GPU`
+- [ ] `build.sh` com Zig: a barra mostra `H.264 GPU` (ou `AV1 GPU` num PC com encoder AV1 e um navegador que decodifica AV1 na GPU)
+- [ ] `agent.log` sem "codec indisponível" para H.264 numa máquina com placa de vídeo; se houver para AVC444/AV1, anote a GPU e o erro
 - [ ] Dois cliques, usuário sem admin: a máquina aparece no console, sem nenhuma janela
 - [ ] Dois cliques de novo, com ele aberto: nada acontece (não derruba a sessão)
 - [ ] Caixa de consentimento aparece (build sem `NO_CONSENT`) e "Não" bloqueia
@@ -101,6 +116,9 @@ Para a janela do visualizador há um teste de fumaça no Wine (container com Xvf
 - [ ] Ctrl+Alt+F entra e sai da tela cheia; Tamanho real fica 1:1
 - [ ] Enviar área de transferência + Ctrl+V cola o texto no PC remoto
 - [ ] Atualização automática: publicar uma versão nova troca o visualizador sem sessão aberta
+- [ ] **4:4:4:** preset Nítido, título com "H.264 4:4:4 GPU"; texto vermelho/azul pequeno (planilha, editor de código) nítido **enquanto rola**; desligar **Cor 4:4:4** volta a "H.264 GPU" sem reconectar
+- [ ] **4:4:4 com preset reduzido** (Equilibrado): cai para H.264 comum sozinho; voltar a Nítido religa o 4:4:4
+- [ ] **AV1** (só com PC remoto RTX 40+/Arc/RX 7000+ e a Extensão de Vídeo AV1 aqui): título "AV1 GPU", imagem normal; sem a extensão, nunca pede AV1
 
 **🧩 Serviço (`suporte-ti-servico.exe`)**
 

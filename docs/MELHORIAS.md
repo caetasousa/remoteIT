@@ -16,7 +16,7 @@
 | 4 | 🟨 [📥 Instalar sem passar pelo navegador](#sem-navegador) | 🔴 | 4a feito; resto ⏱️ 2–4 | o navegador foi a origem da maior parte dos problemas de instalação |
 | 5 | 🟨 [🛡️ Endurecer o login e o console](#login) | 🟡 | limite e CSP feitos; resto ⏱️ 2 | limite de tentativas, 2FA, CSP |
 | 6 | [⚙️ CI no GitHub, com Windows](#ci) | 🟡 | adiado: o usuário vai definir a esteira | hoje nada do Windows é testado automaticamente |
-| 7 | 🟨 [🖥️ Visualizador nativo para o técnico](#viewer-nativo) | 🟡 | 1ª versão feita; 4:4:4 a fazer | o único caminho para cor 4:4:4 e menor latência |
+| 7 | 🟨 [🖥️ Visualizador nativo para o técnico](#viewer-nativo) | 🟡 | feito, com 4:4:4; faltam vários monitores e arquivos | o único caminho para cor 4:4:4 e menor latência |
 | 8 | 🟨 [🧰 Funcionalidades de suporte](#funcionalidades) | 🟡 | área de transferência feita; resto variável | área de transferência, arquivos, vários monitores, Ctrl+Alt+Del |
 | 9 | [📡 Transporte e desempenho](#desempenho) | 🟢 | ⏱️ 5+ | WebTransport/UDP, regiões alteradas |
 | 10 | 🟨 [📜 Auditoria, transparência e LGPD](#lgpd) | 🟡 | órfãs feito; resto ⏱️ 2–3 | aviso de "sendo acessado", retenção, gravação opcional |
@@ -26,6 +26,8 @@
 > ✅ **Feito em 24/11/2026** ([ADR 0010](adr/0010-maquinas-por-tecnico.md)): itens 1 e 2 (modelo **só o dono**; o compartilhamento foi feito e depois retirado em 25/11), 4a (link de instalação, com opção sem prazo e sem limite desde 25/11), e do item 5 o limite de tentativas no login, a CSP com os cabeçalhos de segurança; do item 10, o encerramento das sessões órfãs.
 
 > ✅ **Feito em 25/11/2026** ([ADR 0011](adr/0011-atualizacao-automatica.md), [ADR 0012](adr/0012-visualizador-nativo.md)): item 3 (**atualização automática** do agente e do visualizador, com assinatura própria Ed25519), item 7 em parte (**visualizador nativo para Windows**, 1ª versão), item 8 em parte (**área de transferência** do técnico para o PC remoto, pelo visualizador) e o fim da migração: máquinas antigas removidas e **agentes legados recusados** (`RELAY_LEGACY_AGENTS=false`) em produção.
+
+> ✅ **Feito em 25/11/2026, à tarde** ([ADR 0013](adr/0013-codecs-e-negociacao.md)): **negociação de codecs** (o técnico manda a lista em ordem de preferência e o agente cai sozinho para o próximo), **cor 4:4:4 com a tela em movimento** no visualizador nativo (AVC444: dois H.264 comuns por quadro) e **AV1 opcional** para placas novas, no navegador e no visualizador.
 
 > 💡 **Também em produção desde 24/11/2026:** refresh de nitidez em PNG com a tela parada, modo 1:1 e bitrate menos nervoso ([ADR 0009](adr/0009-refresh-de-nitidez.md)). Estava pronto e sem commit na pasta e foi junto no mesmo build. Não está repetido abaixo.
 
@@ -255,6 +257,8 @@ Os testes rodam só na máquina de desenvolvimento, e tudo o que é Windows (ser
 <a id="viewer-nativo"></a>
 ## 7️⃣ 🟨 🖥️ Visualizador nativo para o técnico (o "substituto do navegador" do lado do técnico)
 
+> ✅ **Cor 4:4:4 feita em 25/11/2026** ([ADR 0013](adr/0013-codecs-e-negociacao.md)): AVC444, com o encoder H.264 de GPU que todo PC já tem.
+>
 > 🟨 **1ª versão feita em 25/11/2026** ([ADR 0012](adr/0012-visualizador-nativo.md), [guia](VISUALIZADOR.md)): Go + Win32, H.264 decodificado pelo Media Foundation (GPU quando possível), todas as teclas sem tela cheia, área de transferência para o PC remoto, atualização automática. Usado **junto** com o console. Falta a cor 4:4:4 (exige mudar o encoder do agente), vários monitores e arquivos.
 
 ### ❗ O problema hoje
@@ -267,7 +271,7 @@ Um **aplicativo do técnico** (Windows/macOS/Linux) que fala o mesmo protocolo d
 
 | Ganho | Por quê |
 |---|---|
-| 🎨 **Cor 4:4:4** em movimento | decoder nativo (Media Foundation, VideoToolbox, VA-API) aceita 4:4:4 |
+| 🎨 **Cor 4:4:4** em movimento | ✅ feito com AVC444: dois fluxos H.264 4:2:0 recompostos no visualizador. (Correção: a ideia original, "o decoder nativo aceita 4:4:4", não valia para o H.264 do Windows, que vai só até o perfil High 4:2:0; veja o [ADR 0013](adr/0013-codecs-e-negociacao.md)) |
 | ⚡ **Menos latência** | decodifica e desenha direto, sem a composição do navegador |
 | ⌨️ **Todas as teclas** sem tela cheia | o app captura o teclado como um programa normal |
 | 📋 **Área de transferência e arquivos** | o app tem acesso ao sistema do técnico |
@@ -359,17 +363,19 @@ Um **aplicativo do técnico** (Windows/macOS/Linux) que fala o mesmo protocolo d
 
 ## 🖼️ Qualidade de imagem: o que mudou de fato
 
-> 🗣️ **Em palavras simples:** com a tela **parada**, a imagem ficou perfeita; com a tela **mexendo**, ainda é a mesma de antes. Avaliação pelo que cada mudança faz, sem medição de PSNR/SSIM.
+> 🗣️ **Em palavras simples:** com a tela **parada**, a imagem ficou perfeita; com a tela **mexendo**, a cor ficou completa no visualizador do técnico, e no navegador continua como antes. O 4:4:4 foi medido (PSNR); o resto é avaliado pelo que a mudança faz.
 
 | Mudança | Efeito |
 |---|---|
 | Refresh de nitidez em PNG ([ADR 0009](adr/0009-refresh-de-nitidez.md)) | **grande** com a tela parada: 300 ms depois, a imagem é idêntica à do PC (texto e cores); só nos presets de resolução nativa |
 | Modo Tamanho real (1:1) | **visível** em monitores com escala 125–150%: sem o borrado do redimensionamento |
 | Bitrate menos nervoso | **pequeno**: menos quedas de qualidade em soluços de rede |
-| Visualizador nativo | **nenhum na imagem** por enquanto (mesmo H.264 4:2:0 do navegador); o ganho é em teclado e decodificação na GPU |
+| Visualizador nativo | o ganho é em teclado e decodificação na GPU; a imagem melhora com o 4:4:4 (linha abaixo) |
+| Cor 4:4:4 (AVC444, [ADR 0013](adr/0013-codecs-e-negociacao.md)) | **grande** com texto colorido e a tela em movimento: numa captura de editor de código + planilha, o 4:2:0 fica preso em ~31 dB em qualquer bitrate, e o 4:4:4 chega a 39 dB com os mesmos bytes. Só no visualizador nativo, na resolução nativa e com encoder de GPU |
+| AV1 opcional | **na banda**, não na imagem: só em PCs com encoder AV1 de GPU, e no técnico com decodificação AV1 na GPU |
 | Máquinas por técnico, links, atualização | nenhum (segurança e operação) |
 
-**Ainda não resolvido:** com a tela em movimento, a cor fica em meia resolução (4:2:0). A próxima etapa é o **4:4:4** no visualizador nativo, que exige mudar o encoder do agente (item 7).
+**Ainda não resolvido:** no **navegador**, com a tela em movimento, a cor continua em meia resolução (4:2:0). O `VideoDecoder` não recompõe as duas visões do 4:4:4; para cor completa o tempo todo, use o visualizador nativo.
 
 ---
 
@@ -377,5 +383,5 @@ Um **aplicativo do técnico** (Windows/macOS/Linux) que fala o mesmo protocolo d
 
 1. ✅ **Feito em 25/11/2026:** as máquinas antigas foram removidas e `RELAY_LEGACY_AGENTS=false` está em produção.
 2. ✅ **Feito em 25/11/2026:** atualização automática (item 3).
-3. 🟨 **Visualizador nativo para Windows** (item 7): 1ª versão feita em 25/11/2026; próxima etapa, cor 4:4:4.
+3. ✅ **Visualizador nativo para Windows** (item 7), com cor 4:4:4 e negociação de codecs desde 25/11/2026. Falta confirmar num PC Windows real o 4:4:4 e o AV1 ([checklist](TESTES.md)).
 4. **CI** (item 6): o usuário vai definir a esteira depois.

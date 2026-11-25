@@ -136,7 +136,7 @@ sequenceDiagram
     end
     R->>R: hub.Attach — derruba o técnico anterior, se houver
     R->>A: {"t":"start"}
-    T->>A: {"t":"hello","h264":true}
+    T->>A: {"t":"hello","codecs":["av1","h264","jpeg"],"h264":true}
     T->>A: {"t":"cfg","p":"quality"}
     A->>T: {"t":"waiting"}
     A->>U: "Permitir o acesso remoto?"
@@ -180,20 +180,23 @@ stateDiagram-v2
 | `secure` | "tela protegida por UAC/bloqueio — aguardando" (retoma sozinho) |
 
 * 🔒 **Entrada só depois do consentimento:** o agente descarta mouse, teclado e o pedido de bloqueio enquanto `granted` não for verdadeiro ([`internal/agent/session`](../internal/agent/session)). O teste `TestInputOnlyAfterConsent` prova isso.
-* 🎬 **H.264 ou JPEG:** se o navegador não mandar `hello` em 1,5 s, o agente assume JPEG.
+* 🎬 **Qual codec:** o `hello` traz a lista do que o técnico decodifica, em ordem de preferência; o agente abre o primeiro que conseguir ([negociação](#codecs)). Sem `hello` em 1,5 s, o agente assume JPEG.
 
 ---
 
 <a id="video"></a>
 ## 4️⃣ Pipeline de vídeo: da GPU do PC à GPU do técnico
 
-> 🗣️ **Em palavras simples:** a tela é copiada direto da placa de vídeo, reduzida e comprimida ali mesmo em H.264 (o mesmo formato de um vídeo do YouTube), sem passar pelo processador. O navegador do técnico recebe e descomprime também na placa de vídeo dele. Sem placa de vídeo, o plano B é tirar "fotos" JPEG da tela.
+> 🗣️ **Em palavras simples:** a tela é copiada direto da placa de vídeo, reduzida e comprimida ali mesmo em H.264 (o mesmo formato de um vídeo do YouTube), sem passar pelo processador. O navegador do técnico recebe e descomprime também na placa de vídeo dele. Placas novas podem usar AV1, que gasta menos internet; o visualizador do técnico pode pedir a cor completa (4:4:4). Sem placa de vídeo, o plano B é tirar "fotos" JPEG da tela.
 
 ```mermaid
 graph LR
     subgraph PC["🖥️ PC atendido"]
         D["🎞️ DXGI Desktop<br/>Duplication"] --> S["📐 D3D11<br/>escala + NV12"]
-        S --> E["⚡ Media Foundation<br/>H.264 (NVENC/QSV/AMF)"]
+        D --> SH["🎨 shaders D3D11<br/>2 visões NV12"]
+        S --> E["⚡ Media Foundation<br/>H.264 ou AV1 (NVENC/QSV/AMF)"]
+        SH --> E2["⚡⚡ 2× H.264<br/>AVC444"]
+        E2 --> F
         G["🖼️ GDI BitBlt"] -.sem GPU.-> J["🗜️ JPEG"]
         E --> F["📦 cabeçalho 12 bytes<br/>codec, keyframe, w, h, seq"]
         J --> F
@@ -210,11 +213,26 @@ graph LR
 
 | Etapa | Código | Observação |
 |---|---|---|
-| Captura + encoder | [`internal/agent/media/h264`](../internal/agent/media/h264) (C em `rcenc.h`) | compilado com Zig; sem Zig, o build sai só com JPEG |
+| Captura + encoder | [`internal/agent/media/gpu`](../internal/agent/media/gpu) (C em `rcenc.h`) | H.264, AVC444 e AV1; compilado com Zig; sem Zig, o build sai só com JPEG |
+| Arranjo do 4:4:4 | [`internal/avc444`](../internal/avc444/avc444.go) | a referência que o shader do agente e o visualizador seguem |
 | Fallback | [`media/capture`](../internal/agent/media/capture), [`media/jpeg`](../internal/agent/media/jpeg) | GDI + `image/jpeg`; qualidade 25–85 conforme o bitrate |
 | Laço de transmissão | [`media/stream.go`](../internal/agent/media/stream.go) | abre a fonte, mede, envia stats 1x/s |
 | Formato do quadro | [`internal/protocol`](../internal/protocol) + [`frontend/src/lib/protocol.ts`](../frontend/src/lib/protocol.ts) | veja [PROTOCOLO.md](PROTOCOLO.md) |
 | Decodificação | [`frontend/src/lib/viewer/session.ts`](../frontend/src/lib/viewer/session.ts) | o caminho dos quadros fica fora do Svelte ([ADR 0003](adr/0003-svelte-no-console.md)) |
+
+<a id="codecs"></a>
+### 🎞️ Codecs e negociação
+
+| Codec | Quem decodifica | Quando o agente usa |
+|---|---|---|
+| **H.264 4:4:4 (AVC444)** | só o visualizador nativo, com **Qualidade → Cor 4:4:4** | encoder H.264 de GPU e preset de resolução nativa |
+| **AV1** | navegador ou visualizador que decodifica AV1 na GPU | encoder AV1 de GPU (RTX 40+, Arc / Core Ultra, RX 7000+) |
+| **H.264** | qualquer navegador; o visualizador | sempre que há encoder (GPU ou software) |
+| **JPEG** | todos | sem encoder de vídeo, ou se os outros falharam |
+
+* 📋 **Quem decide é a lista do técnico:** o `hello` leva os codecs em ordem de preferência (navegador: AV1, H.264, JPEG; visualizador nativo: 4:4:4, AV1, H.264, JPEG). O agente abre o primeiro que conseguir e pula o que não serve para o preset (4:4:4 com resolução reduzida). Código: [`media/stream.go`](../internal/agent/media/stream.go) (`openCodec`).
+* 🩹 **Falhou, troca sozinho:** um encoder que não abre, ou que quebra no meio, fica marcado e o próximo entra. Do lado do técnico, três falhas seguidas do decodificador (ou AV1 que engole 120 quadros sem mostrar nada) tiram o codec do `hello`, e o agente troca.
+* 🎨 **Como o 4:4:4 cabe no H.264 comum:** o agente manda duas imagens 4:2:0. A principal é um H.264 normal; a auxiliar carrega a cor que a principal descarta. O visualizador junta as duas e recupera a cor de cada pixel. Detalhes e medições: [ADR 0013](adr/0013-codecs-e-negociacao.md).
 
 ### 🎚️ Presets de qualidade
 
@@ -227,7 +245,7 @@ graph LR
 
 * 🖱️ **Cursor por cima do vídeo:** o agente manda a posição (`cur`) e o formato (`cs`) do cursor separados, e o console desenha o cursor local. Ele se move na hora, mesmo que o quadro ainda esteja a caminho.
 * 🔁 **Refino com a tela parada:** quando nada muda, o agente recodifica o último quadro mais duas vezes (`FlagRepeat`) para deixar o texto nítido.
-* 🔍 **Refresh de nitidez (sem perda):** 300 ms depois da tela parar, o agente tira uma captura GDI e manda em **PNG** (codec 3), só uma vez. Ela corrige o que o H.264 perde mesmo refinado: a cor em meia resolução (4:2:0), que borra texto colorido e o ClearType. Só nos presets de resolução nativa (`quality`, `quality60`), só se a imagem couber em 2 s de banda do alvo atual, e descartada se a tela mudou enquanto era comprimida. Código: [`media/still.go`](../internal/agent/media/still.go); decisão: [ADR 0009](adr/0009-refresh-de-nitidez.md).
+* 🔍 **Refresh de nitidez (sem perda):** 300 ms depois da tela parar, o agente tira uma captura GDI e manda em **PNG** (codec 3), só uma vez. Ela corrige o que o H.264 perde mesmo refinado: a cor em meia resolução (4:2:0), que borra texto colorido e o ClearType (no visualizador nativo com 4:4:4, a cor já chega inteira e o PNG só limpa os artefatos de compressão). Só nos presets de resolução nativa (`quality`, `quality60`), só se a imagem couber em 2 s de banda do alvo atual, e descartada se a tela mudou enquanto era comprimida. Código: [`media/still.go`](../internal/agent/media/still.go); decisão: [ADR 0009](adr/0009-refresh-de-nitidez.md).
 * 🔎 **Exibição sem interpolação:** o console posiciona e dimensiona o canvas em **pixels físicos** do monitor (`devicePixelRatio`), não em CSS px, e arredonda para pixels inteiros. No modo **1:1 (Tamanho real)** cada pixel remoto ocupa exatamente um pixel do monitor, com rolagem se não couber; no modo ajustado, se sobra até 10% de espaço ele também usa 1:1 em vez de ampliar um pouco e borrar tudo. A escolha fica no `localStorage`.
 
 ---
@@ -684,8 +702,8 @@ sequenceDiagram
     V->>R: POST /api/login (token guardado com DPAPI)
     V->>R: GET /api/agents a cada 3 s
     V->>R: GET /ws/viewer?id=m_… (mesmo cookie)
-    V->>A: hello {h264: true se o Media Foundation abriu}
-    A->>V: quadro H.264 → Media Foundation (GPU) → BGRA → GDI
+    V->>A: hello {codecs: avc444, av1, h264, jpeg — o que o Windows decodifica}
+    A->>V: quadro AVC444 → 2× Media Foundation (GPU) → recompõe 4:4:4 → BGRA → GDI
     V->>A: ack (só depois de desenhar)
     T->>V: Win+R (hook de teclado: não chega ao Windows local)
     V->>A: kd MetaLeft · kd KeyR · ku… (nomes do protocolo)
@@ -697,7 +715,7 @@ sequenceDiagram
 | Detalhe | Onde |
 |---|---|
 | API e protocolo (Go puro, testado no Linux) | [`internal/viewer/client`](../internal/viewer/client) |
-| H.264 pelo Media Foundation, GPU (DXVA) ou CPU; JPEG/PNG | [`internal/viewer/decode`](../internal/viewer/decode) |
+| H.264, AVC444 e AV1 pelo Media Foundation, GPU (DXVA) ou CPU; recomposição 4:4:4 em C (`yuv.h`); JPEG/PNG | [`internal/viewer/decode`](../internal/viewer/decode) |
 | Janelas, desenho, mouse, hook de teclado, teclas mortas | [`internal/viewer/win`](../internal/viewer/win) |
 | Tabela de teclas compartilhada com o agente | [`internal/protocol/keys.go`](../internal/protocol/keys.go) |
 

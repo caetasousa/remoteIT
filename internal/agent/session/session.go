@@ -25,7 +25,7 @@ import (
 // injetam uma implementação falsa.
 type Stream interface {
 	Run(ctx context.Context)
-	OnHello(h264 bool)
+	OnHello(codecs []string)
 	SetPreset(name string)
 	RequestKeyframe()
 	OnAck(seq uint32)
@@ -83,7 +83,7 @@ func (c *Controller) Handle(m protocol.Message) {
 	}
 	switch m.T {
 	case protocol.TypeHello:
-		t.stream.OnHello(m.H264)
+		t.stream.OnHello(m.Accepts())
 	case protocol.TypeAck:
 		t.stream.OnAck(m.S)
 	case protocol.TypeKeyframe:

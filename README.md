@@ -19,7 +19,7 @@ graph LR
 | | Funcionalidade | Quem |
 |---|---|:---:|
 | 👀 | **Ver e controlar** a tela remota: mouse, teclado (com acentos), roda, Ctrl+Shift+Esc | técnico |
-| ⚡ | **Vídeo H.264 na GPU** (NVENC, Intel QSV, AMD AMF) decodificado pelo navegador; JPEG quando não há GPU | — |
+| ⚡ | **Vídeo H.264 na GPU** (NVENC, Intel QSV, AMD AMF) decodificado pelo navegador; **AV1** em placas novas; **cor 4:4:4** no visualizador do técnico; JPEG quando não há GPU. O codec é negociado e cai sozinho para o próximo se falhar | [ADR 0013](docs/adr/0013-codecs-e-negociacao.md) |
 | 🎚️ | **Trocar a qualidade** sem reconectar (Ultra-rápido, Equilibrado, Nítido, Máximo) e ver codec, resolução, FPS, banda e RTT | técnico |
 | 🖵 | **Tela cheia** capturando Win, Alt+Tab e afins (Keyboard Lock API) | técnico |
 | 🔒 | **Bloquear a tela** remota (como Win+L) e **logar com outra conta** do Windows | técnico |
@@ -91,7 +91,7 @@ docker compose up -d --build                                                    
 | Peça | Uso |
 |---|---|
 | 🎞️ DXGI Desktop Duplication + D3D11 | captura a tela na GPU, escala e converte para NV12 sem passar pela CPU |
-| ⚡ Media Foundation (C via cgo, compilado com Zig) | encoder H.264 de hardware: NVENC, Intel QSV, AMD AMF; fallback software |
+| ⚡ Media Foundation (C via cgo, compilado com Zig) | encoders H.264 e AV1 de hardware: NVENC, Intel QSV, AMD AMF; fallback software no H.264; shaders D3D11 para o 4:4:4 (AVC444) |
 | 🖼️ GDI + `image/jpeg` | fallback universal, sem GPU |
 | ⌨️ `SendInput` | injeta mouse e teclado (imprimíveis como Unicode, independentes do layout) |
 | 🧩 `golang.org/x/sys/windows/svc` | serviço do Windows que lança o agente na sessão ativa |
@@ -112,7 +112,7 @@ docker compose up -d --build                                                    
 | Peça | Uso |
 |---|---|
 | 🧡 Svelte 5 + TypeScript + Vite | interface (SPA) |
-| 🎬 WebCodecs (`VideoDecoder`) | decodifica H.264 na GPU do técnico |
+| 🎬 WebCodecs (`VideoDecoder`) | decodifica H.264 (e AV1, se a GPU do técnico decodifica) |
 | ⌨️ Keyboard Lock API | captura Win, Alt+Tab em tela cheia |
 
 ### 🏗️ Infraestrutura
@@ -140,7 +140,7 @@ sequenceDiagram
     R->>A: {"t":"start"}
     A->>T: {"t":"granted"} (consentimento)
     loop até o técnico sair
-        A->>T: quadro H.264 ou JPEG
+        A->>T: quadro H.264, AV1, 4:4:4 ou JPEG
         T->>A: {"t":"ack"} libera o próximo
         T->>A: mouse e teclado
     end
@@ -218,7 +218,7 @@ make test-e2e          # 🌐 navegador real (Playwright) contra o compose (Dock
 
 * 🛡️ **Sem o modo serviço**, não controla janelas elevadas (UAC) nem a tela de bloqueio: o Windows não deixa um programa comum mexer nelas. A sessão mostra "tela protegida" e retoma sozinha.
 * 🖵 Só o **monitor principal**; área de transferência só em texto, do técnico para o PC e pelo visualizador nativo; sem arquivos nem áudio.
-* 🎨 Com a tela em movimento, a cor fica em meia resolução (H.264 4:2:0); com a tela parada, o refresh de nitidez deixa a imagem idêntica à do PC.
+* 🎨 No navegador, com a tela em movimento, a cor fica em meia resolução (H.264 4:2:0); com a tela parada, o refresh de nitidez deixa a imagem idêntica à do PC. No visualizador do técnico a cor vem completa (4:4:4) também em movimento, na resolução nativa.
 * ⌨️ **Ctrl+Alt+Del** não pode ser simulado (o Windows reserva essa combinação). Se a política do PC exigir Ctrl+Alt+Del antes do login, o login remoto para nessa tela.
 * 🌐 Proxy: respeita `HTTP_PROXY`/`HTTPS_PROXY`; proxy autenticado ou PAC do Windows, ainda não.
 * 🏚️ Agentes antigos (de antes do cadastro por máquina) são **recusados** em produção (`RELAY_LEGACY_AGENTS=false`); reinstale com um agente baixado do console.

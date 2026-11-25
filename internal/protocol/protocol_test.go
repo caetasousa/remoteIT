@@ -3,6 +3,7 @@ package protocol
 import (
 	"bytes"
 	"encoding/json"
+	"slices"
 	"testing"
 )
 
@@ -57,6 +58,47 @@ func TestIsInput(t *testing.T) {
 	for _, typ := range []string{TypeHello, TypeAck, TypeStart, TypeConfig} {
 		if (Message{T: typ}).IsInput() {
 			t.Errorf("%q should not be input", typ)
+		}
+	}
+}
+
+func TestAcceptsKeepsOrderAndEndsWithJPEG(t *testing.T) {
+	cases := []struct {
+		m    Message
+		want []string
+	}{
+		{Message{H264: true}, []string{"h264", "jpeg"}},
+		{Message{}, []string{"jpeg"}},
+		{Message{Codecs: []string{"avc444", "jpeg", "h264", "h264"}}, []string{"avc444", "h264", "jpeg"}},
+		// com Codecs, o campo antigo é ignorado: quem manda a lista manda tudo
+		{Message{H264: true, Codecs: []string{"av1"}}, []string{"av1", "jpeg"}},
+	}
+	for _, c := range cases {
+		if got := c.m.Accepts(); !slices.Equal(got, c.want) {
+			t.Errorf("Accepts(%+v) = %v, want %v", c.m, got, c.want)
+		}
+	}
+}
+
+func TestAVC444RoundTrip(t *testing.T) {
+	main, aux := []byte{0, 0, 0, 1, 0x65}, []byte{0, 0, 1, 0x41, 9}
+	p := AppendAVC444(nil, true, false, main, aux)
+	// o layout é contrato com o visualizador nativo
+	if !bytes.Equal(p[:5], []byte{1, 0, 0, 0, 5}) {
+		t.Fatalf("cabeçalho = %v", p[:5])
+	}
+	m, a, mk, ak, err := ParseAVC444(p)
+	if err != nil || !bytes.Equal(m, main) || !bytes.Equal(a, aux) || !mk || ak {
+		t.Fatalf("ParseAVC444 = %x %x %v %v %v", m, a, mk, ak, err)
+	}
+	// só a auxiliar neste quadro
+	m, a, _, ak, err = ParseAVC444(AppendAVC444(nil, false, true, nil, aux))
+	if err != nil || len(m) != 0 || !bytes.Equal(a, aux) || !ak {
+		t.Fatalf("só auxiliar: %x %x %v %v", m, a, ak, err)
+	}
+	for _, bad := range [][]byte{{1, 0, 0}, {0, 0, 0, 0, 9, 1}} {
+		if _, _, _, _, err := ParseAVC444(bad); err != ErrShortAVC444 {
+			t.Errorf("ParseAVC444(%v) err = %v", bad, err)
 		}
 	}
 }

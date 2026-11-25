@@ -9,6 +9,17 @@ O formato segue o [Keep a Changelog](https://keepachangelog.com/pt-BR/1.1.0/) e 
 
 ### Added
 
+- **Negociação de codecs** ([ADR 0013](docs/adr/0013-codecs-e-negociacao.md)): o `hello` leva
+  `codecs`, a lista do que o técnico decodifica em ordem de preferência; o agente abre o primeiro que
+  conseguir e cai sozinho para o próximo se um encoder não abrir ou quebrar. O técnico também desiste
+  de um codec depois de três falhas seguidas do decodificador. O campo `h264` continua para agentes
+  antigos.
+- **Cor 4:4:4 com a tela em movimento** no visualizador nativo (AVC444, codec 4): duas imagens H.264
+  4:2:0 por quadro, montadas por shaders D3D11 e codificadas por dois encoders de GPU, recompostas no
+  visualizador. Menu **Qualidade → Cor 4:4:4**, ligado por padrão, nos presets de resolução nativa.
+  Referência do arranjo em `internal/avc444`.
+- **AV1 opcional** (codec 5): encoder AV1 de GPU do Media Foundation no agente; no navegador, só
+  quando o `VideoDecoder` decodifica AV1 na GPU; no visualizador, com a Extensão de Vídeo AV1.
 - **Cada técnico com as suas máquinas** ([ADR 0010](docs/adr/0010-maquinas-por-tecnico.md)): o `.exe`
   baixado sai marcado com um código do técnico; na primeira execução a máquina troca o código por
   uma credencial própria (ID aleatório, DPAPI) e fica no nome dele. Só o dono e os admins veem e
@@ -50,6 +61,9 @@ O formato segue o [Keep a Changelog](https://keepachangelog.com/pt-BR/1.1.0/) e 
 
 ### Changed
 
+- O pacote `internal/agent/media/h264` passou a se chamar `internal/agent/media/gpu` (tem H.264,
+  AVC444 e AV1); o decodificador do visualizador (`rcdec.h`) entrega NV12 e a conversão de cor foi
+  para `internal/viewer/decode/yuv.h`, testada no Linux.
 - Console redesenhado: tema escuro estilo terminal (ciano, monoespaçada) e layout para celular
   ([docs/DESIGN.md](docs/DESIGN.md)). A tela de acesso remoto ganhou barra com telemetria legível
   (codec, resolução, fps, banda, RTT).
@@ -73,6 +87,11 @@ O formato segue o [Keep a Changelog](https://keepachangelog.com/pt-BR/1.1.0/) e 
 
 ### Fixed
 
+- Console num navegador sem H.264 por hardware (máquina virtual, por exemplo): o decodificador era
+  configurado com `prefer-hardware`, que o Chromium recusa sem GPU, e a tela nunca aparecia. Agora a
+  aceleração vem da sondagem (GPU se houver, senão software); e depois de três falhas o console pede
+  outro codec em vez de insistir.
+- Um quadro de codec desconhecido no console não recebia `ack` e podia travar o controle de fluxo.
 - A tela remota não preenchia o espaço: uma resolução menor que a janela ficava pequena no centro. Agora cresce mantendo a proporção.
 - `NO_CONSENT=1` no `build.sh` gera o agente que transmite sem pedir confirmação (use com aviso/consentimento da empresa).
 - Remover um usuário agora derruba a tela remota que ele tinha aberta; antes ele seguia no controle.

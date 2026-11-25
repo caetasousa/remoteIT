@@ -18,7 +18,8 @@ em `internal/`.
 - **session / media**: no agente, consentimento antes de vídeo e input; controle de fluxo com no máximo 2 quadros sem ACK.
 - **storage/postgres**: único pacote com SQL; migrations em `migrations/*.sql`.
 - **update**: agente e visualizador se atualizam sozinhos; build.sh assina dist/update.json com chave Ed25519 do projeto (cmd/signupdate), o cliente confere assinatura e hash (ADR 0011).
-- **viewer**: visualizador nativo do técnico para Windows (cmd/viewer, internal/viewer/{client,decode,win}); mesmo protocolo do console, H.264 via Media Foundation, hook de teclado, mensagem `clip` (ADR 0012).
+- **viewer**: visualizador nativo do técnico para Windows (cmd/viewer, internal/viewer/{client,decode,win}); mesmo protocolo do console, H.264/AVC444 (cor 4:4:4)/AV1 via Media Foundation, hook de teclado, mensagem `clip` (ADR 0012, 0013).
+- **codecs**: o hello leva `codecs` em ordem de preferência (avc444, av1, h264, jpeg); o agente (internal/agent/media/stream.go, encoders em internal/agent/media/gpu) abre o primeiro que conseguir; referência do 4:4:4 em internal/avc444 (ADR 0013).
 - **machines / agentbin / agent/machine**: cada máquina tem dono (quem baixou o .exe, marcado com um código de cadastro no download), credencial própria; acessam só o dono e os admins (ADR 0010). Links de instalação podem ser permanentes.
 - **lifecycle / desktop**: duas edições do agente (`main.edition`): portátil e serviço. O serviço lança o worker como SYSTEM na sessão do console, e captura e entrada seguem o desktop ativo (Default/Winlogon). Nada abre janela; logs em %ProgramData%\RemoteIT (ADRs 0007 e 0008).
 

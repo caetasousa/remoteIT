@@ -18,3 +18,4 @@ Formato: **Contexto** (o problema), **Decisão** (o que foi feito) e **Consequê
 | [0010](0010-maquinas-por-tecnico.md) | 🔐 Máquinas por técnico | o `.exe` sai com o código do técnico; cada máquina tem credencial própria |
 | [0011](0011-atualizacao-automatica.md) | 🔄 Atualização automática | o agente se troca sozinho; assinatura própria (Ed25519) no lugar de certificado |
 | [0012](0012-visualizador-nativo.md) | 🖥️ Visualizador nativo | programa Windows do técnico, junto com o console; todas as teclas e decodificação na GPU |
+| [0013](0013-codecs-e-negociacao.md) | 🎞️ Codecs por negociação | H.264 de base; 4:4:4 em dois H.264 (AVC444) no visualizador; AV1 só com GPU nova |

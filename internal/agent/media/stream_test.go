@@ -68,7 +68,7 @@ func TestStreamRecoversWhenDesktopCanBeFollowedAgain(t *testing.T) {
 	}
 	send := &recSender{frames: make(chan struct{}, 1)}
 	s := NewStream(enc, send, slog.New(slog.NewTextHandler(io.Discard, nil)))
-	s.OnHello(false)
+	s.OnHello([]string{protocol.CodecNameJPEG})
 
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan struct{})
@@ -175,7 +175,7 @@ func runScreen(t *testing.T, preset string, changing bool, d time.Duration) (*ac
 	s := NewStream(enc, send, slog.New(slog.NewTextHandler(io.Discard, nil)))
 	send.ack = s.OnAck
 	s.SetPreset(preset)
-	s.OnHello(true)
+	s.OnHello([]string{protocol.CodecNameH264, protocol.CodecNameJPEG})
 	ctx, cancel := context.WithTimeout(context.Background(), d)
 	defer cancel()
 	s.Run(ctx)

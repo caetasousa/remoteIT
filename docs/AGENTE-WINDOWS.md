@@ -137,7 +137,7 @@ Test-Path C:\ProgramData\RemoteIT\machine.json                               # j
 | Arquivo | Quem escreve | O que tem |
 |---|---|---|
 | `C:\ProgramData\RemoteIT\service.log` | serviço e instalador | instalou, atualizou, removeu, lançou o worker (sessão, pid) ou **por que não conseguiu** |
-| `C:\ProgramData\RemoteIT\agent.log` | worker | conectou ao relay, abriu a captura (qual encoder), não conseguiu seguir o desktop, caiu para JPEG |
+| `C:\ProgramData\RemoteIT\agent.log` | worker | conectou ao relay, abriu a captura (qual encoder e codec), "codec indisponível, tentando o próximo" (com o motivo: sem encoder de GPU, d3dcompiler ausente, segunda sessão de NVENC recusada…), não conseguiu seguir o desktop |
 
 ```powershell
 type C:\ProgramData\RemoteIT\service.log -Encoding UTF8

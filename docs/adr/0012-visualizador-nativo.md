@@ -34,7 +34,8 @@ porta de entrada para gestão, auditoria e acesso de qualquer lugar).
 - Negativo: mais um programa para manter, e a parte de janela/decodificação só é exercitada no
   Windows (aqui ela é compilada e passa por um teste de fumaça no Wine; o H.264 por GPU, o hook de
   teclado e o DPAPI precisam de teste manual).
-- **Cor 4:4:4 ainda não:** esta versão decodifica o mesmo H.264 4:2:0 do navegador. A segunda etapa
-  exige mudar o encoder do agente.
+- **Cor 4:4:4:** a 1ª versão decodificava o mesmo H.264 4:2:0 do navegador. Desde 25/11/2026, com a
+  mudança no encoder do agente, o visualizador recebe 4:4:4 em dois fluxos H.264 (AVC444) e AV1 quando
+  há suporte ([ADR 0013](0013-codecs-e-negociacao.md)).
 - A captura do teclado inteiro significa que, com a sessão em primeiro plano, Alt+Tab não troca de
   janela no PC do técnico: desligue em **Teclado** ou clique fora da janela.

@@ -47,3 +47,10 @@ diferentes:
   mostraria essa área preta até a tela mudar. A cada parada há uma captura GDI extra no PC remoto.
 - Não resolvido: enquanto a tela **mexe**, a cor continua em 4:2:0. Isso só um programa instalado
   com 4:4:4 resolve.
+
+## Revisão 25/11/2026
+
+O "não resolvido" acima foi resolvido no **visualizador nativo** pelo [ADR 0013](0013-codecs-e-negociacao.md):
+4:4:4 com a tela em movimento, feito com dois fluxos H.264 4:2:0 (AVC444). A alternativa "dois fluxos
+4:2:0 combinados", descartada aqui para o navegador, continua descartada para ele. No visualizador
+nativo, a recomposição é feita em C na CPU, sem shader. O refresh PNG continua valendo nos dois.
