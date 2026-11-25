@@ -29,6 +29,9 @@ type Store interface {
 	StartAccess(ctx context.Context, e Entry) (id int64, err error)
 	EndAccess(ctx context.Context, id int64, at time.Time) error
 	ListAccesses(ctx context.Context, limit int) ([]Entry, error)
+	// CloseOpen grava at como fim de todo acesso ainda aberto e devolve
+	// quantos eram.
+	CloseOpen(ctx context.Context, at time.Time) (int64, error)
 }
 
 // Log aplica a regra de auditoria sobre um [Store].
@@ -62,6 +65,14 @@ func (l *Log) Begin(ctx context.Context, e Entry) (end func(), err error) {
 			l.logger.Error("auditoria: falha ao gravar fim do acesso", "id", id, "err", err)
 		}
 	}, nil
+}
+
+// CloseOrphans encerra os acessos que ficaram abertos porque o relay parou
+// no meio deles (um reinício derruba todas as conexões, e a função de fim
+// devolvida por [Log.Begin] não chega a rodar). Deve ser chamada na partida,
+// antes de aceitar conexões: nesse momento nenhum acesso está de fato aberto.
+func (l *Log) CloseOrphans(ctx context.Context) (int64, error) {
+	return l.store.CloseOpen(ctx, l.now())
 }
 
 // Recent devolve os últimos limit acessos, do mais novo para o mais antigo.

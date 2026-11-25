@@ -41,7 +41,8 @@ binário com `-domain` (Let's Encrypt, porta 443 pública) ou `-cert/-key`.
 | Variável | Usada por | Descrição |
 | --- | --- | --- |
 | `POSTGRES_PASSWORD` | db, relay | Senha do banco. Vai em URL: evite `@ : / ? #` |
-| `RELAY_AGENT_KEY` | relay | ≥ 16 caracteres; a mesma embutida no agente pelo `build.sh` |
+| `RELAY_AGENT_KEY` | relay | ≥ 16 caracteres; a chave dos agentes **legados**, a mesma embutida no agente pelo `build.sh` |
+| `RELAY_LEGACY_AGENTS` | relay | `true` (padrão) aceita agentes antigos, sem cadastro, visíveis só para admins; `false` os recusa — use depois de reinstalar todas as máquinas |
 | `RELAY_ADMIN_USER` / `RELAY_ADMIN_PASS` | relay | Admin criado só se o banco não tiver usuários |
 | `RELAY_BIND` / `RELAY_PORT` | compose | Onde publicar o relay (padrão `127.0.0.1:8080`) |
 | `RELAY_CLIENT_IP_HEADER` | relay | Cabeçalho com o IP real do técnico para a auditoria (`Cf-Connecting-IP` atrás do Cloudflare Tunnel). Só use se o relay não for acessível sem o túnel: o cabeçalho pode ser falsificado |
@@ -137,13 +138,25 @@ consentimento da empresa aos usuários — sem isso, a pessoa pode ser observada
 (sem a variável) é pedir confirmação. UAC e o SmartScreen do Windows são do sistema e não somem por
 aqui: só com um `.exe` assinado por certificado ou política de domínio.
 
+## 🔑 Chave de atualização (guarde uma cópia!)
+
+O `build.sh` assina cada versão com a chave em `~/.config/remoteit/update-ed25519.key` (criada na
+primeira vez; `UPDATE_KEY` muda o caminho). Os agentes só aceitam atualizações assinadas por ela
+([ADR 0011](adr/0011-atualizacao-automatica.md)).
+
+* 💾 **Faça uma cópia offline** (pendrive, cofre de senhas). Perdê-la obriga a reinstalar todos os
+  agentes à mão uma vez.
+* 🚫 **Nunca** copie a chave para o servidor nem para o repositório: o servidor recebe só o
+  `dist/update.json`, que tem as assinaturas.
+* 🧪 Teste a versão nova numa máquina antes de publicar: em até 1 hora todas se atualizam sozinhas.
+
 ## 🚀 Publicar uma versão nova
 
 ```mermaid
 flowchart TD
     B["🔧 build.sh<br/>(NO_CONSENT=1 se for o caso)"] --> Q{"o que mudou?"}
-    Q -- "só o agente" --> EXE["📋 troca os .exe em ~remoteit/app/dist/<br/>(backup .bak-AAAAMMDDhhmm ao lado)"]
-    EXE --> OK(["✅ sem reiniciar nada:<br/>o próximo download já é o novo"])
+    Q -- "só o agente" --> EXE["📋 troca os .exe e o update.json em ~remoteit/app/dist/<br/>(backup ao lado)"]
+    EXE --> OK(["✅ sem reiniciar nada: o próximo download já é o novo<br/>e as máquinas se atualizam em até 1 h"])
     Q -- "relay ou console" --> S{"há sessão remota aberta?<br/>access_log com ended_at nulo"}
     S -- sim --> ASK(["⏸️ combine com quem está usando"])
     S -- não --> BK["💾 backup: .env, compose.yaml, exes,<br/>lista de imagens"]
@@ -160,4 +173,4 @@ flowchart TD
 
 > ⚠️ Reiniciar o relay com uma sessão aberta derruba o técnico e deixa a linha da auditoria com `ended_at` nulo. Os agentes reconectam sozinhos em segundos.
 
-> 💡 O `build.sh` não é reprodutível: cada build gera um hash diferente, mesmo sem mudar o código. Anote o hash publicado (`sha256sum dist/*.exe`) para quem for conferir o download ([AGENTE-WINDOWS.md](AGENTE-WINDOWS.md#conferir-versao)).
+> 💡 O relay grava o código do técnico em cada `.exe` baixado, então o hash do arquivo em `dist/` não é o hash que o técnico recebe. Um `.exe` de um build antigo (sem o espaço do código) faz o download responder **503 "agente do servidor desatualizado"**: refaça o `build.sh`.

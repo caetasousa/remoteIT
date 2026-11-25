@@ -26,27 +26,43 @@
 | `POST /api/account/email` | logado | `{email, password}` | 202 · 403 senha errada · 409 já tem e-mail |
 | `POST /api/account/email/complete` | logado + link | `{token}` | 200 `User` · 400 |
 | `GET /api/me` | logado | | 200 `User` · 401 |
-| `GET /api/agents` | logado | | 200 `AgentInfo[]` |
+| `GET /api/agents` | logado | | 200 `Machine[]`: as que o usuário acessa (admin: todas), online e offline |
+| `DELETE /api/machines/{id}` | dono ou admin | | 204; o agente é desconectado e passa a receber 403 |
+| `GET /api/links` | logado | | 200 `InstallLink[]` válidos do usuário |
+| `POST /api/links` | logado | `{edition: portatil \| servico, hours: 1–168 ou 0 = sem prazo, uses: 1–100 ou 0 = sem limite}` | 201 `InstallLink` + `path` (`/i/<código>`, só nesta resposta) · 400 |
+| `DELETE /api/links/{id}` | dono do link ou admin | | 204 · 404 |
+| `GET /api/agent/update?mid=&edition=` | credencial da máquina | | 200 `{version, sha256, signature, size}` do `update.json` · 204 sem atualização publicada · 401/403 |
+| `GET /api/agent/update/{edition}?mid=` | credencial da máquina | | o `.exe` da edição, **sem** código gravado ([ADR 0011](adr/0011-atualizacao-automatica.md)) |
+| `GET /i/{código}` | **público** | | o `.exe` da edição do link, marcado com o código · 404 inválido/vencido/esgotado · 429 (200/dia por IP) |
+| `POST /api/agent/enroll` | **público** + código | `{code, name}` | 201 `{id, secret}` · 403 código inválido · 400 · 429 (120/h por IP) |
 | `GET /api/users` | admin | | 200 `User[]` · 403 |
 | `POST /api/users` | admin | `{username, password, role}` | 201 `User` · 400 inválido · 409 duplicado |
 | `POST /api/users/{id}/approve` | admin | | 200 `User` · 404 |
 | `DELETE /api/users/{id}` | admin | | 204 · 400 a si mesmo · 404 |
 | `GET /api/audit` | admin | | 200 `AuditEntry[]` (últimos 200, mais novo primeiro) |
-| `GET /ws/viewer?id=` | logado | | WebSocket ([protocolo](PROTOCOLO.md)) · 404 offline · close 1011 sem auditoria |
-| `GET /ws/agent?id=&host=&user=&key=` | chave | | WebSocket · 403 |
-| `GET /download/agent.exe` | logado | | `suporte-ti.exe`, edição portátil (se `-agent-exe`); `Cache-Control: no-store, private` |
-| `GET /download/agent-servico.exe` | logado | | `suporte-ti-servico.exe`, edição de serviço (`-agent-service-exe`, padrão: ao lado do `-agent-exe`) |
+| `GET /ws/viewer?id=` | quem acessa a máquina | | WebSocket ([protocolo](PROTOCOLO.md)) · 404 sem acesso ou offline · close 1011 sem auditoria |
+| `GET /ws/agent?mid=&host=&user=&ver=` | credencial (`Authorization: Bearer`) | | WebSocket · 401 credencial inválida · 403 máquina removida |
+| `GET /ws/agent?id=&host=&user=&key=` | chave (legado) | | WebSocket · 403 (ou com `RELAY_LEGACY_AGENTS=false`) |
+| `GET /download/agent.exe` | logado | | `suporte-ti.exe` **marcado com um código novo do usuário** (30 dias, até 50 máquinas); `Cache-Control: no-store, private` · 503 se o `.exe` do servidor não tem o espaço do código |
+| `GET /download/agent-servico.exe` | logado | | o mesmo, edição de serviço (`-agent-service-exe`, padrão: ao lado do `-agent-exe`) |
 | `GET /healthz` | público | | 200 `ok` · 503 banco fora |
 
 ## 🧾 Tipos
 
 ```ts
 User       { id, username, email?, pending, role: "admin" | "technician", createdAt }
-AgentInfo  { id, host, user, since, busy, viewedBy? }
+Machine     { id, name, owner?, legacy, createdAt, lastSeenAt?,
+              online, user?, since?, busy, viewedBy?, mine, canManage }
+InstallLink { id, kind, edition, maxUses (1 000 000 = sem limite), uses, createdAt,
+              expiresAt (daqui a 100 anos = sem prazo), path? (só na criação) }
 AuditEntry { id, userId (0 se removido), username, agentId, host, remoteAddr, startedAt, endedAt? }
 ```
 
 ## 🚦 Limites e regras
+
+`POST /api/login` responde **429** depois de 10 senhas erradas para o mesmo usuário ou 20 do mesmo IP
+em 15 minutos (só falhas contam). Todas as respostas levam `Content-Security-Policy`,
+`X-Frame-Options: DENY`, `X-Content-Type-Options: nosniff` e `Referrer-Policy: no-referrer`.
 
 `username` no login aceita o nome ou o e-mail. Sem SMTP, as rotas de `/api/account/*` (menos
 `config`) respondem 503. Limites de e-mail: 20 pedidos/h por IP; 3/h por destinatário e tipo; por dia,

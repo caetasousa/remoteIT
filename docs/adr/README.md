@@ -14,3 +14,6 @@ Formato: **Contexto** (o problema), **Decisão** (o que foi feito) e **Consequê
 | [0006](0006-contas-por-email.md) | ✉️ Contas por e-mail | cadastro com confirmação e aprovação; recuperação por link de uso único |
 | [0007](0007-modo-servico-system.md) | 🛡️ Worker SYSTEM seguindo o desktop | o único jeito de ver e controlar a tela de bloqueio e de login |
 | [0008](0008-duas-edicoes-do-agente.md) | 📦 Duas edições e nenhuma janela | "executar" e "instalar" são downloads diferentes, e nada mostra aviso |
+| [0009](0009-refresh-de-nitidez.md) | 🔍 Refresh de nitidez em PNG | vídeo enquanto a tela mexe, imagem sem perda quando ela para |
+| [0010](0010-maquinas-por-tecnico.md) | 🔐 Máquinas por técnico | o `.exe` sai com o código do técnico; cada máquina tem credencial própria |
+| [0011](0011-atualizacao-automatica.md) | 🔄 Atualização automática | o agente se troca sozinho; assinatura própria (Ed25519) no lugar de certificado |

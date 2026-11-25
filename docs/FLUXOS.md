@@ -18,29 +18,38 @@ Os diagramas são [Mermaid](https://mermaid.js.org/): o GitHub os desenha sozinh
 | 🔟 | [Dois técnicos na mesma máquina](#dois-tecnicos) | o segundo assume |
 | 1️⃣1️⃣ | [Contas por e-mail](#contas) | cadastro, aprovação, recuperação e vínculo |
 | 1️⃣2️⃣ | [Entregar uma versão nova do agente](#entrega) | por que o download nunca vem do cache |
+| 1️⃣3️⃣ | [Máquinas por técnico](#maquinas) | o `.exe` marcado, o cadastro e o link de instalação |
+| 1️⃣4️⃣ | [Atualização automática](#atualizacao) | o agente se troca sozinho pela versão que o relay anuncia |
 
 ---
 
 <a id="agente"></a>
 ## 1️⃣ Agente entra no ar
 
-> 🗣️ **Em palavras simples:** ao abrir, o agente liga para o relay como um navegador abriria um site seguro, se apresenta com a chave secreta embutida no `.exe` e fica com a linha aberta. Se a linha cair, ele liga de novo, esperando cada vez um pouco mais (até 30 s) para não martelar o servidor.
+> 🗣️ **Em palavras simples:** ao abrir, o agente liga para o relay como um navegador abriria um site seguro e se apresenta com a **credencial da máquina** (o "RG" que ela ganhou no cadastro, [fluxo 13](#maquinas)). Se ainda não tem, ele se cadastra primeiro com o código que veio gravado no `.exe`. Depois fica com a linha aberta; se ela cair, liga de novo, esperando cada vez um pouco mais (até 30 s).
 
 ```mermaid
 sequenceDiagram
     autonumber
-    participant A as 🖥️ Agente<br/>(relayclient)
-    participant R as 🔀 Relay<br/>(httpapi + hub)
+    participant A as 🖥️ Agente<br/>(machine.Keeper + relayclient)
+    participant R as 🔀 Relay<br/>(httpapi + machines + hub)
     participant C as 🧑‍💻 Console
-    A->>R: GET /ws/agent?id=pc1&host=PC1&user=ana&key=•••
-    alt chave errada
-        R-->>A: 403
-        Note over A: tenta de novo com backoff
-    else chave certa
-        R->>R: hub.Register(pc1) — se já havia um pc1, a conexão antiga cai
+    A->>A: credencial em machine.json?
+    opt não tem (primeira execução)
+        A->>R: POST /api/agent/enroll {código do .exe, nome}
+        R-->>A: {id: m_..., secret}
+        A->>A: guarda protegido pelo DPAPI
+    end
+    A->>R: GET /ws/agent?mid=m_...&host=PC1&user=ana<br/>Authorization: Bearer secret
+    alt credencial desconhecida
+        R-->>A: 401 → apaga a credencial e se cadastra de novo
+    else máquina removida
+        R-->>A: 403 → segue tentando de 30 em 30 s, sem voltar sozinha
+    else ok
+        R->>R: hub.Register(m_...) · "visto por último"
         R-->>A: 101 WebSocket
         C->>R: GET /api/agents (a cada 3 s)
-        R-->>C: [{id: pc1, host: PC1, user: ana, busy: false}]
+        R-->>C: só as máquinas que esse usuário acessa
     end
     loop a cada 20 s
         R->>A: ping
@@ -54,12 +63,14 @@ sequenceDiagram
 
 | Detalhe | Valor | Onde |
 |---|---|---|
-| ID da máquina | hostname em minúsculas | `cmd/agent/main.go` |
+| ID da máquina | aleatório, `m_` + 16 caracteres; o nome do computador é só exibição | `internal/relay/machines` |
+| Credencial | 256 bits; no banco só o SHA-256; no PC, DPAPI em `machine.json` | `internal/agent/machine` |
 | Backoff | 1 s, dobrando até 30 s; volta a 1 s após 30 s conectado | `internal/agent/relayclient` |
 | Keepalive | ping a cada 20 s; leitura expira em 60 s | `relayclient`, `httpapi` |
-| Mesma ID duas vezes | a conexão nova substitui a antiga | `internal/relay/hub` |
+| Mesma máquina duas vezes | a conexão nova substitui a antiga (só com a mesma credencial) | `internal/relay/hub` |
+| Agente antigo (sem cadastro) | `?id=nome&key=chave`, aceito como **legado** e visível só para admins | `RELAY_LEGACY_AGENTS` |
 
-> ⚠️ Por causa da última linha, **duas cópias do agente no mesmo PC se derrubam** em loop ("conectado/desconectado" no log do relay). Por isso o agente portátil sai em silêncio quando já há outra cópia ou o serviço rodando ([fluxo 9](#instalar)).
+> ⚠️ **Duas cópias com a mesma credencial se derrubam** em loop ("conectado/desconectado" no log do relay). Por isso o agente portátil sai em silêncio quando já há outra cópia ou o serviço rodando ([fluxo 9](#instalar)). Portátil e serviço no mesmo PC têm credenciais diferentes e aparecem como duas máquinas.
 
 ---
 
@@ -114,6 +125,10 @@ sequenceDiagram
     participant U as 🙋 Usuário do PC
     T->>R: GET /ws/viewer?id=pc1 (cookie + Origin)
     R->>R: auth: cookie válido? Origin = host?
+    R->>R: machines.CanAccess: dono ou admin?
+    alt sem acesso
+        R-->>T: 404 (igual a "não existe": não revela máquinas alheias)
+    end
     R->>DB: audit.Begin (técnico, máquina, IP, início)
     alt banco falhou
         R-->>T: close 1011 — sem registro, sem acesso
@@ -211,6 +226,8 @@ graph LR
 
 * 🖱️ **Cursor por cima do vídeo:** o agente manda a posição (`cur`) e o formato (`cs`) do cursor separados, e o console desenha o cursor local. Ele se move na hora, mesmo que o quadro ainda esteja a caminho.
 * 🔁 **Refino com a tela parada:** quando nada muda, o agente recodifica o último quadro mais duas vezes (`FlagRepeat`) para deixar o texto nítido.
+* 🔍 **Refresh de nitidez (sem perda):** 300 ms depois da tela parar, o agente tira uma captura GDI e manda em **PNG** (codec 3), só uma vez. Ela corrige o que o H.264 perde mesmo refinado: a cor em meia resolução (4:2:0), que borra texto colorido e o ClearType. Só nos presets de resolução nativa (`quality`, `quality60`), só se a imagem couber em 2 s de banda do alvo atual, e descartada se a tela mudou enquanto era comprimida. Código: [`media/still.go`](../internal/agent/media/still.go); decisão: [ADR 0009](adr/0009-refresh-de-nitidez.md).
+* 🔎 **Exibição sem interpolação:** o console posiciona e dimensiona o canvas em **pixels físicos** do monitor (`devicePixelRatio`), não em CSS px, e arredonda para pixels inteiros. No modo **1:1 (Tamanho real)** cada pixel remoto ocupa exatamente um pixel do monitor, com rolagem se não couber; no modo ajustado, se sobra até 10% de espaço ele também usa 1:1 em vez de ampliar um pouco e borrar tudo. A escolha fica no `localStorage`.
 
 ---
 
@@ -229,9 +246,11 @@ flowchart TD
     CH -- sim --> SEND["envia quadro seq=n<br/>flow.Sent(n)"] --> START
     ACK(["✅ ack s=n chega"]) --> RTT["flow.OnAck: libera 1 vaga<br/>e mede o RTT"]
     SEC(["🕐 a cada 1 s"]) --> B{"houve<br/>congestionamento?"}
-    B -- sim --> DOWN["bitrate × 0,75<br/>(nunca abaixo do mínimo do preset)"]
-    B -- não --> UP["bitrate × 1,1 + 50 kbps<br/>(nunca acima do máximo)"]
+    B -- "sim (≥ 10 esperas, ~30 ms)" --> DOWN["bitrate × 0,75<br/>(nunca abaixo do mínimo do preset)"]
+    B -- "soluço (1 a 9 esperas)" --> HOLD["mantém o bitrate"]
+    B -- não --> UP["bitrate × 1,2 + 50 kbps<br/>(nunca acima do máximo)"]
     DOWN --> STATS["envia stats: enc, fps, kbps, target, rtt, w, h"]
+    HOLD --> STATS
     UP --> STATS
 ```
 
@@ -240,8 +259,9 @@ flowchart TD
 | Quadros em trânsito | no máximo 2 | [`media/flow.go`](../internal/agent/media/flow.go) |
 | Ack perdido | depois de 3 s sem ack, o agente supõe que ele se perdeu e libera a vaga | `flow.go` (teste `TestFlowControlLostAck`) |
 | Ack falso ou repetido | ignorado | `TestFlowControlIgnoresBogusAcks` |
-| Queda de bitrate | −25% por segundo congestionado | `media.NextBitrate` |
-| Subida de bitrate | +10% + 50 kbps por segundo livre | `media.NextBitrate` |
+| Queda de bitrate | −25% por segundo congestionado (≥ `CongestedThreshold` = 10 esperas de 3 ms) | `media.NextBitrate` |
+| Soluço isolado | 1 a 9 esperas no segundo: mantém o bitrate. Pela Cloudflare um atraso pontual é comum e não deve derrubar a qualidade | `media.NextBitrate` |
+| Subida de bitrate | +20% + 50 kbps por segundo livre: recupera uma queda de 25% em ~2 s (com +10% a imagem ficava vários segundos borrada) | `media.NextBitrate` |
 | Keyframe sob pedido | `kf` descarta o que está em trânsito | `Stream.RequestKeyframe` |
 
 ---
@@ -528,5 +548,121 @@ sequenceDiagram
     Note over CF,N: ninguém guarda a resposta
 ```
 
-* 🧾 **Confira o hash** do arquivo baixado (`Get-FileHash`) contra o publicado; os comandos estão em [AGENTE-WINDOWS.md](AGENTE-WINDOWS.md#conferir-versao).
-* 🔐 **Só para quem está logado:** sem cookie, as rotas de download respondem 401. O `private` impede que um cache compartilhado guarde um arquivo que tem a chave do agente embutida.
+* 🏷️ **Cada download é único:** o relay grava o código do técnico no `.exe` ([fluxo 13](#maquinas)), então dois arquivos baixados nunca têm o mesmo hash. Para conferir o que está instalado, veja [AGENTE-WINDOWS.md](AGENTE-WINDOWS.md#conferir-versao).
+* 🔐 **Só para quem está logado** (ou com um link de instalação): sem cookie, as rotas de download respondem 401. O `private` impede que um cache compartilhado guarde um arquivo que cadastra máquinas no nome de alguém.
+
+---
+
+<a id="maquinas"></a>
+## 1️⃣3️⃣ Máquinas por técnico: `.exe` marcado, cadastro e links
+
+> 🗣️ **Em palavras simples:** cada técnico só vê as máquinas **dele**. Quando ele baixa o agente, o relay grava dentro do `.exe` um código que diz "isto é da Ana". O PC que rodar esse `.exe` troca o código por uma credencial própria e entra na lista da Ana. Ela pode **removê-la**; o admin vê todas. Para o cliente, que não tem conta, a Ana manda um **link de instalação**, que pode ser permanente.
+
+### 🏷️ Do download à máquina na lista
+
+```mermaid
+sequenceDiagram
+    autonumber
+    participant T as 🧑‍💻 Ana (técnica)
+    participant R as 🔀 Relay
+    participant DB as 🐘 Banco
+    participant PC as 🖥️ PC do cliente
+    T->>R: GET /download/agent.exe
+    R->>DB: código novo (dona: Ana, 30 dias, até 50 máquinas)
+    R->>R: agentbin.Stamp: grava o código depois do marcador
+    R-->>T: suporte-ti.exe (único, com o código da Ana)
+    T->>PC: leva o .exe (pendrive, e-mail, link)
+    PC->>R: POST /api/agent/enroll {código, nome}
+    R->>DB: consome 1 uso + cria a máquina (dona: Ana) numa transação
+    R-->>PC: {id: m_..., secret}
+    PC->>R: /ws/agent com a credencial
+    T->>R: GET /api/agents
+    R-->>T: PC do cliente (mine: true)
+```
+
+```
+suporte-ti.exe (7 MB)
+ ... código do agente ...
+ ~RemoteIT-enroll-slot-v1~________________________________________   ← build.sh (vazio)
+ ~RemoteIT-enroll-slot-v1~kxq4m2...7a___________                      ← depois do download
+ ... resto do binário ...
+```
+
+* 🔎 O marcador aparece **uma única vez** no binário (o agente nunca usa o marcador sozinho, só o tamanho dele). O relay se recusa a gravar se achar zero ou dois — e o teste de integração confere isso no binário de verdade.
+* 🔁 Um `.exe` com **outro código** num PC já cadastrado (outro técnico) cadastra de novo, no nome desse técnico.
+
+### 👀 Quem vê e quem gerencia
+
+| | Vê e conecta | Remove |
+|---|:---:|:---:|
+| 👤 Dona da máquina (gerou o código) | ✅ | ✅ |
+| 👑 Administrador | ✅ (todas) | ✅ |
+| 🧑‍💻 Qualquer outro técnico | ❌ (404) | ❌ |
+| 🏚️ Máquina **legada** (agente antigo) | só admins | admins |
+
+Não há compartilhamento: cada técnico atende as máquinas dos agentes e links dele. **Remover**
+desconecta o agente, revoga a credencial (403 ao reconectar) e tira a máquina das listas.
+
+### 🔗 Link de instalação (cliente sem conta)
+
+```mermaid
+sequenceDiagram
+    autonumber
+    participant T as 🧑‍💻 Ana
+    participant R as 🔀 Relay
+    participant C as 🙋 Cliente
+    T->>R: POST /api/links {servico, sem prazo, sem limite}
+    R-->>T: /i/<código> (mostrado só agora)
+    T->>C: manda o link (WhatsApp, e-mail)
+    C->>R: GET /i/<código> (sem login)
+    R-->>C: suporte-ti-servico.exe marcado com o código do link
+    C->>C: dois cliques → UAC → serviço instalado → cadastra no nome da Ana
+    Note over R: link permanente: serve para o próximo cliente também,<br/>até a Ana revogar
+```
+
+| Regra | Valor |
+|---|---|
+| Validade | 1 hora a 7 dias, ou **sem prazo** |
+| Máquinas por link | 1 a 100, ou **sem limite** |
+| Revogar | o dono do link ou um admin; quem ainda não instalou não baixa mais |
+| Limite por IP | 200 downloads/dia em `/i/`, 120 cadastros/hora |
+
+---
+
+<a id="atualizacao"></a>
+## 1️⃣4️⃣ Atualização automática do agente
+
+> 🗣️ **Em palavras simples:** para publicar uma versão nova, basta trocar os arquivos no servidor. Cada agente pergunta ao relay "qual é a versão?" quando conecta e a cada hora. Se for outra, ele confere que o arquivo foi **assinado pela chave do projeto** (que nunca sai da máquina de build), espera nenhum técnico estar conectado, baixa e se troca sozinho. Ninguém precisa mexer no PC.
+
+```mermaid
+sequenceDiagram
+    autonumber
+    participant B as 👩‍💻 build.sh
+    participant R as 🔀 Relay (dist/)
+    participant A as 🖥️ Agente
+    B->>B: versão 2026.11.25.0300 nos .exe<br/>assina update.json com a chave privada
+    B->>R: suporte-ti*.exe + update.json
+    A->>R: conecta (ou passou 1 h)
+    A->>R: GET /api/agent/update?mid=…&edition=servico
+    R-->>A: {version, sha256, signature}
+    alt mesma versão
+        Note over A: nada a fazer
+    else versão diferente
+        A->>A: assinatura confere com a chave pública embutida?
+        A->>A: algum técnico conectado? → espera e tenta em 1 min
+        A->>R: GET /api/agent/update/servico?mid=…
+        R-->>A: .exe
+        A->>A: SHA-256 confere?
+        A->>A: serviço: roda "install" com o .exe novo<br/>portátil: troca o próprio .exe e reabre
+        A->>R: reconecta na versão nova (coluna "Versão" no console)
+    end
+```
+
+| Detalhe | Valor |
+|---|---|
+| Quando checa | 30 s depois de iniciar, a cada reconexão e a cada 1 h |
+| Com técnico conectado | adia; tenta de novo a cada 1 min |
+| Prova de legitimidade | assinatura Ed25519 de edição + versão + SHA-256, e o SHA-256 do `.exe` baixado |
+| Rollback | publicar a versão anterior: os agentes seguem "a versão do relay", não "a maior" |
+| Agentes antigos | os instalados antes desta versão não têm o atualizador: reinstalar uma vez à mão |
+

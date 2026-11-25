@@ -64,6 +64,9 @@ Start-Process "$env:USERPROFILE\Downloads\suporte-ti-servico.exe" -ArgumentList 
 
 ## 🔄 Atualizar
 
+> ✅ **Desde a versão com atualização automática ([ADR 0011](adr/0011-atualizacao-automatica.md)), não precisa fazer nada:** o agente se troca sozinho em até 1 hora depois de uma versão nova ser publicada, sempre fora de um atendimento. A coluna **Versão** do console mostra quem já atualizou. O passo a passo abaixo vale para a primeira instalação de quem ainda tem uma versão anterior a essa.
+
+
 **É igual a instalar:** baixe o `suporte-ti-servico.exe` novo e dê dois cliques. Ele para o serviço, troca o arquivo no Program Files e inicia de novo. Durante esses segundos, o técnico conectado cai e reconecta.
 
 ```mermaid
@@ -103,18 +106,31 @@ Remove-Item "C:\Program Files\RemoteIT" -Recurse -Force -ErrorAction SilentlyCon
 Get-Service RemoteITAgent                                                   # está rodando?
 (Get-CimInstance Win32_Service -Filter "Name='RemoteITAgent'").PathName     # de qual arquivo?
 Get-Process suporte-ti -IncludeUserName | Format-Table Id,SessionId,UserName -AutoSize
-(Get-FileHash "C:\Program Files\RemoteIT\suporte-ti.exe").Hash.Substring(0,12)
+Test-Path C:\ProgramData\RemoteIT\machine.json                               # já se cadastrou?
 ```
 
 | O que olhar | Certo |
 |---|---|
 | `PathName` | `"C:\Program Files\RemoteIT\suporte-ti.exe" service` |
 | Processos | dois, os dois `AUTORIDADE NT\SISTEMA`: o serviço na sessão **0** e o worker na sua sessão (1, 2...) |
-| Hash | o mesmo do arquivo publicado (o administrador do relay tem a lista) |
+| `machine.json` | `True`: a máquina já trocou o código do `.exe` pela credencial dela |
+
+> 💡 **Hash não serve mais para conferir a versão:** cada download sai com o código do técnico gravado, então dois `.exe` baixados nunca têm o mesmo hash. A versão certa é a que você acabou de baixar pelo console ou pelo link.
 
 > ⚠️ Se o worker aparecer com o **seu usuário** (ex.: `PC\ana`) em vez de SISTEMA, é uma versão antiga do agente: ela não consegue digitar na tela de bloqueio. Atualize.
 
 ---
+
+## 🪪 Identidade da máquina
+
+| Arquivo | Quem usa | Protegido por |
+|---|---|---|
+| `C:\ProgramData\RemoteIT\machine.json` | serviço (worker SYSTEM) | DPAPI da máquina: copiar para outro PC não funciona |
+| `%LOCALAPPDATA%\RemoteIT\machine.json` | portátil (seu usuário) | DPAPI do usuário |
+
+* Na primeira execução, o agente troca o **código gravado no `.exe`** pela credencial e grava este arquivo. Daí em diante, usa só a credencial.
+* Para instalar em vários PCs, gere um **link de instalação** com várias máquinas (até 100) e use o mesmo `.exe` baixado dele em todos. O portátil também aceita o código à mão (`-code <código>` ou `REMOTEIT_CODE`), útil em testes; o serviço usa sempre o código gravado no `.exe`. Implantação por MSI/GPO ainda não existe (veja [MELHORIAS.md](MELHORIAS.md#sem-navegador)).
+* Apagar o `machine.json` faz a máquina se cadastrar de novo (se o código ainda valer) e aparecer como **outra** máquina no console.
 
 ## 📜 Logs
 
@@ -149,7 +165,9 @@ time=... level=INFO msg="conectado ao relay" id=pc1
 | Fica "conectado/desconectado" alternando | **duas cópias** do agente com o mesmo nome (ex.: serviço + portátil antigo) | `Get-Process suporte-ti -IncludeUserName`; finalize a cópia que não é SISTEMA |
 | "tela protegida por UAC/bloqueio — aguardando" | agente **portátil** na tela de bloqueio/UAC, ou versão antiga do serviço | use o serviço atualizado; veja o `agent.log` |
 | Vejo a tela de bloqueio mas não consigo digitar | worker antigo rodando com o usuário, não como SYSTEM | atualize o serviço e confira os processos |
-| Baixei de novo e o hash não mudou | **cache** (navegador ou Cloudflare) | recarregue o console com Ctrl+F5 antes de baixar; o relay já manda `no-store` e o link muda a cada carregamento |
+| A máquina não aparece na **minha** lista | o `.exe` foi baixado por outro técnico (a máquina é dele), ou é um agente antigo | baixe o agente com a sua conta (ou peça para compartilharem); agentes antigos só aparecem para admins |
+| A máquina sumiu e não volta | alguém a **removeu** no console: a credencial foi revogada | instale um agente baixado de novo (ele se cadastra como máquina nova) |
+| "conectado/desconectado" depois de clonar o PC | a imagem clonada levou o `machine.json` junto | apague `machine.json` no clone e reinicie o serviço: ele se cadastra de novo (se o código do `.exe` ainda valer) |
 | O navegador salvou `suporte-ti (1).exe` | já havia um arquivo com o mesmo nome | tudo bem: o nome não importa, a edição está dentro do `.exe` |
 | `install` "não fez nada" | o UAC foi negado, ou o PowerShell não esperou | rode com `Start-Process ... -Wait` e leia o `service.log` |
 | O PC exige Ctrl+Alt+Del antes do login | política de grupo (*Logon interativo: não exigir Ctrl+Alt+Del* desativada) | o Windows não deixa simular essa combinação; desative a política ou faça o login local |
@@ -190,7 +208,8 @@ Um `.exe` que captura a tela e injeta mouse e teclado se comporta como um malwar
 | Flag / variável | Descrição |
 |---|---|
 | `-relay` / `REMOTEIT_RELAY` | URL do relay (o build embute um padrão) |
-| `-key` / `REMOTEIT_KEY` | chave do agente (o build embute um padrão) |
+| `-code` / `REMOTEIT_CODE` | código de cadastro (o download do console já grava um no `.exe`) |
+| `-key` / `REMOTEIT_KEY` | chave compartilhada do modo legado (o build embute um padrão) |
 | `-noconsent` | não pede consentimento (o build com `NO_CONSENT=1` já embute) |
 | `install` / `uninstall` | instala/atualiza ou remove o serviço (pede o UAC) |
 | `service` / `worker` | uso interno do Windows e do serviço; não rode à mão |

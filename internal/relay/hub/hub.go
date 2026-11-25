@@ -47,6 +47,7 @@ type Conn interface {
 // Agent é uma máquina conectada ao relay.
 type Agent struct {
 	ID, Host, User string
+	Version        string // versão do agente ("" em builds antigos)
 	Since          time.Time
 
 	conn Conn
@@ -103,6 +104,7 @@ type Info struct {
 	ID       string    `json:"id"`
 	Host     string    `json:"host"`
 	User     string    `json:"user"`
+	Version  string    `json:"version,omitempty"`
 	Since    time.Time `json:"since"`
 	Busy     bool      `json:"busy"`
 	ViewedBy string    `json:"viewedBy,omitempty"`
@@ -122,8 +124,8 @@ func New() *Hub {
 
 // Register adiciona um agente. Se já existe um agente com o mesmo ID, a
 // conexão antiga é fechada e substituída.
-func (h *Hub) Register(id, host, user string, c Conn) *Agent {
-	a := &Agent{ID: id, Host: host, User: user, Since: h.now(), conn: c}
+func (h *Hub) Register(id, host, user, version string, c Conn) *Agent {
+	a := &Agent{ID: id, Host: host, User: user, Version: version, Since: h.now(), conn: c}
 	h.mu.Lock()
 	old := h.agents[id]
 	h.agents[id] = a
@@ -160,7 +162,7 @@ func (h *Hub) List() []Info {
 	out := make([]Info, 0, len(h.agents))
 	for _, a := range h.agents {
 		a.vmu.Lock()
-		out = append(out, Info{a.ID, a.Host, a.User, a.Since, a.viewer != nil, a.viewedBy})
+		out = append(out, Info{a.ID, a.Host, a.User, a.Version, a.Since, a.viewer != nil, a.viewedBy})
 		a.vmu.Unlock()
 	}
 	h.mu.Unlock()
@@ -214,5 +216,13 @@ func (h *Hub) Detach(a *Agent, v Conn) {
 	a.vmu.Unlock()
 	if current {
 		a.Send(TextMessage, []byte(`{"t":"`+protocol.TypeStop+`"}`))
+	}
+}
+
+// Kick derruba a conexão do agente id (a máquina foi removida) e o técnico
+// que o via. Offline, não faz nada.
+func (h *Hub) Kick(id string) {
+	if a := h.Get(id); a != nil {
+		a.conn.Close()
 	}
 }

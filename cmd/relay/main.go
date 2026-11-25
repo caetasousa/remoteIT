@@ -10,7 +10,10 @@
 // Variáveis de ambiente:
 //
 //	DATABASE_URL       obrigatória, ex.: postgres://user:pass@db:5432/remoteit
-//	RELAY_AGENT_KEY    obrigatória, >= 16 caracteres, a mesma embutida no agente
+//	RELAY_AGENT_KEY    obrigatória, >= 16 caracteres: a chave dos agentes legados
+//	                   (sem cadastro), a mesma embutida no agente pelo build.sh
+//	RELAY_LEGACY_AGENTS "false" recusa agentes legados; padrão: aceita, visíveis
+//	                   só para administradores, até as máquinas serem reinstaladas
 //	RELAY_ADMIN_USER   nome do admin inicial (padrão "admin")
 //	RELAY_ADMIN_PASS   senha do admin inicial; só é usada enquanto não existe
 //	                   nenhum usuário no banco
@@ -41,6 +44,7 @@ import (
 	"remoteit/internal/relay/httpapi"
 	"remoteit/internal/relay/hub"
 	"remoteit/internal/relay/identity"
+	"remoteit/internal/relay/machines"
 	"remoteit/internal/relay/mail"
 	"remoteit/internal/relay/server"
 	"remoteit/internal/relay/storage/postgres"
@@ -112,14 +116,28 @@ func run(opt server.Options, agentExe, agentSvcExe string, logger *slog.Logger) 
 		}
 	}
 
+	auditLog := audit.New(db, logger)
+	if n, err := auditLog.CloseOrphans(ctx); err != nil {
+		return fmt.Errorf("encerrar acessos abertos por um reinício: %w", err)
+	} else if n > 0 {
+		logger.Info("acessos encerrados pelo reinício do relay", "quantos", n)
+	}
+	legacy := os.Getenv("RELAY_LEGACY_AGENTS") != "false"
+	if legacy {
+		logger.Info("agentes legados (chave compartilhada) aceitos; RELAY_LEGACY_AGENTS=false os recusa")
+	}
+
 	handler := httpapi.New(httpapi.Config{
 		Hub:             hub.New(),
 		Identity:        ids,
-		Audit:           audit.New(db, logger),
+		Audit:           auditLog,
 		Accounts:        accounts,
+		Machines:        machines.New(db),
 		AgentKey:        agentKey,
+		LegacyAgents:    legacy,
 		AgentExe:        agentExe,
 		AgentServiceExe: agentSvcExe,
+		UpdateManifest:  updateManifest(agentExe),
 		Static:          web.FS(),
 		Health:          db.Ping,
 		Logger:          logger,
@@ -127,6 +145,14 @@ func run(opt server.Options, agentExe, agentSvcExe string, logger *slog.Logger) 
 		ClientIPHeader: os.Getenv("RELAY_CLIENT_IP_HEADER"),
 	})
 	return server.Run(ctx, opt, handler, logger)
+}
+
+// updateManifest é o update.json que o build.sh grava ao lado dos .exe.
+func updateManifest(agentExe string) string {
+	if agentExe == "" {
+		return ""
+	}
+	return filepath.Join(filepath.Dir(agentExe), "update.json")
 }
 
 // newAccounts devolve nil, sem erro, quando não há SMTP configurado.

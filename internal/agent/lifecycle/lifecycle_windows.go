@@ -78,6 +78,9 @@ func Dispatch(args []string, installer bool) Mode {
 func Init(mode Mode) {
 	pSetProcessDPIAware.Call()
 	if mode == Worker {
+		// sobra de uma atualização anterior (veja ApplyUpdate); se o install
+		// ainda estiver terminando, apagar falha e fica para a próxima
+		os.RemoveAll(filepath.Join(StateDir(Worker), "update"))
 		return
 	}
 	if serviceRunning() {
@@ -88,6 +91,8 @@ func Init(mode Mode) {
 	if h != 0 && e == syscall.ERROR_ALREADY_EXISTS {
 		os.Exit(0)
 	}
+	instanceMutex = windows.Handle(h)
+	cleanupOldExe()
 	// o handle fica aberto até o processo terminar: é ele que mantém o mutex
 }
 
@@ -101,6 +106,28 @@ func LogOutput(mode Mode) io.Writer {
 		return os.Stderr
 	}
 	return openLog("agent.log")
+}
+
+// StateDir é onde o agente guarda a credencial da máquina. O worker do
+// serviço (SYSTEM) usa %ProgramData%\RemoteIT, a mesma pasta dos logs; o
+// portátil, que roda sem admin, usa %LOCALAPPDATA%\RemoteIT do usuário.
+// São identidades separadas de propósito: o portátil não consegue ler a do
+// serviço.
+func StateDir(mode Mode) string {
+	if mode == Worker {
+		return filepath.Join(cmpEnv("ProgramData", `C:\ProgramData`), "RemoteIT")
+	}
+	if d, err := os.UserCacheDir(); err == nil { // %LOCALAPPDATA%
+		return filepath.Join(d, "RemoteIT")
+	}
+	return filepath.Join(os.TempDir(), "RemoteIT")
+}
+
+func cmpEnv(name, fallback string) string {
+	if v := os.Getenv(name); v != "" {
+		return v
+	}
+	return fallback
 }
 
 // openLog abre (criando) %ProgramData%\RemoteIT\name para acrescentar; o

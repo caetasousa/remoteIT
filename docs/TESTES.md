@@ -26,9 +26,12 @@ possível as dependências são reais (banco, relay, WebSocket, agente). Motivo:
 | Pacote | O que fixa |
 | --- | --- |
 | `protocol` | Cabeçalho binário: codificar e decodificar de volta e o layout byte a byte |
-| `relay/hub` | Substituição de conexão, técnico novo assume, `stop` só do técnico atual, repasse |
+| `relay/hub` | Substituição de conexão, técnico novo assume, `stop` só do técnico atual, repasse, derrubar máquina removida |
+| `protocol` (atualização) | assinatura recusada com outra chave, outro `.exe`, outra versão, outra edição ou sem chave |
+| `relay/agentbin` | Gravar o código no espaço reservado do `.exe`; recusar binário sem espaço, com dois espaços ou código inválido |
+| `agent/machine` | Cadastra uma vez e reusa a credencial; `.exe` de outro técnico recadastra; código recusado cai na credencial antiga ou no legado; 401 apaga a credencial, 403 não |
 | `relay/identity` | Validação de nome, senha e papel; não remover a si mesmo |
-| `relay/httpapi` | Limite por IP e agrupamento de IPv6 |
+| `relay/httpapi` | Limite por IP e agrupamento de IPv6; limite de login conta só falhas, por IP e por usuário |
 | `relay/mail` | Validação da configuração SMTP |
 | `agent/media` | Bitrate adaptativo; controle de fluxo (limite em trânsito, quadro lento, ACK perdido, ACK falso); **a captura troca de thread quando o desktop não pode ser seguido e volta a transmitir** (`TestStreamRecoversWhenDesktopCanBeFollowedAgain`) |
 | `agent/input` | Tabela `KeyboardEvent.code` → virtual-key |
@@ -43,6 +46,8 @@ cria um relay completo com `httptest` sobre o banco limpo (`newEnv`).
 | `relay_test.go` | login/logout, login sem JSON → 415, chave do agente, agente entra e sai da lista, ponte agente ↔ técnico com quadro de 300 KB idêntico, segundo técnico assume, agente sai → técnico cai, sem login → 401, outra origem → 403 (CSWSH), offline → 404, gestão de usuários e papéis, sessão de usuário removido invalida, auditoria com início e fim, **sem auditoria → acesso recusado**, **download nunca vem de cache** e troca o arquivo sem reiniciar (`TestAgentDownloadIsNeverCached`), **as duas edições saem cada uma pela sua rota** (`TestBothAgentEditionsDownload`) |
 | `accounts_test.go` | com Mailpit real: cadastro e aprovação, primeiro admin por e-mail, campos injetados, link vencido, reusado e concorrente, recuperação derruba sessão e tela, vínculo de e-mail, limites, migração de banco existente |
 | `agent_test.go` | agente real transmite JPEG válido 640x360 e envia stats, consentimento negado → nenhum quadro, **sem ACK no máximo 2 quadros** e retomada após ACK, **input só depois do consentimento**, **bloquear a tela só depois do consentimento** (`TestLockOnlyAfterConsent`) |
+| `machines_test.go` | **o binário real do agente, baixado pelo técnico, se cadastra sozinho e só aparece para a dona e os admins**, e reusa a identidade ao rodar de novo (`TestDownloadedAgentBelongsToItsTechnician`); credencial errada → 401, legado não usa ID `m_`, remover derruba e dá 403; link de instalação público com limite de máquinas, revogação e a versão sem prazo e sem limite; limite de login; cabeçalhos de segurança; acessos órfãos encerrados na partida |
+| `update_test.go` | com a ferramenta de assinatura real: o agente recebe exatamente o `.exe` publicado; mesma versão não faz nada; técnico conectado adia; legado não atualiza; `.exe` trocado, manifesto reescrito ou chave de outro projeto são recusados; a versão aparece no console |
 | `storage_test.go` | migrations idempotentes, auditoria sobrevive à remoção do usuário, sessão vencida rejeitada, admin inicial só com banco vazio |
 
 Fakes usados: `recordingInjector` (no lugar do SendInput) e funções de consentimento. Todo o resto
@@ -63,7 +68,8 @@ container e derruba tudo com `down -v`.
 | admin vê a tela remota | quadros atravessam agente → relay → navegador (pixels não pretos no canvas) |
 | criar e recuperar conta | link do Mailpit, aprovação, login por e-mail, senha antiga deixa de valer |
 | associar e-mail | conta antiga confirma o link mesmo tendo saído |
-| técnico cadastrado | admin cadastra; técnico não vê abas de admin, acessa a máquina; o acesso aparece na auditoria encerrado |
+| técnico isolado | admin cadastra um técnico; o técnico **não vê** a máquina do admin nem tem botão de compartilhar; o acesso do admin aparece na auditoria encerrado |
+| link de instalação | gerar pela tela um link **sem prazo e sem limite**; ele abre sem login; um link inventado dá 404 |
 
 Falhou? O Playwright grava trace em `frontend/test-results/`; abra com `npx playwright show-trace`.
 

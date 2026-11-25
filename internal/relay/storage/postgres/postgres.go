@@ -223,7 +223,13 @@ func (db *DB) EndAccess(ctx context.Context, id int64, at time.Time) error {
 	return err
 }
 
-// ListAccesses devolve os últimos limit acessos, do mais novo para o mais antigo.
+// CloseOpen encerra todos os acessos sem fim registrado.
+func (db *DB) CloseOpen(ctx context.Context, at time.Time) (int64, error) {
+	tag, err := db.pool.Exec(ctx, `UPDATE access_log SET ended_at = $1 WHERE ended_at IS NULL`, at)
+	return tag.RowsAffected(), err
+}
+
+// ListAccesses devolve os últimos limit acessos.
 func (db *DB) ListAccesses(ctx context.Context, limit int) ([]audit.Entry, error) {
 	rows, err := db.pool.Query(ctx, `SELECT id, COALESCE(user_id, 0), username, agent_id, host,
 		remote_addr, started_at, ended_at FROM access_log ORDER BY started_at DESC, id DESC LIMIT $1`, limit)

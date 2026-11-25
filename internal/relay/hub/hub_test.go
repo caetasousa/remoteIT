@@ -57,8 +57,8 @@ func (w *fakeWriter) Close() error                { return w.c.WriteMessage(0, w
 func TestRegisterReplacesSameID(t *testing.T) {
 	h := New()
 	first, second := &fakeConn{}, &fakeConn{}
-	old := h.Register("pc1", "PC1", "ana", first)
-	cur := h.Register("pc1", "PC1", "ana", second)
+	old := h.Register("pc1", "PC1", "ana", "", first)
+	cur := h.Register("pc1", "PC1", "ana", "", second)
 
 	if !first.closed {
 		t.Error("conexão antiga deveria ser fechada")
@@ -72,7 +72,7 @@ func TestRegisterReplacesSameID(t *testing.T) {
 func TestAttachSendsStartAndTakeover(t *testing.T) {
 	h := New()
 	agentConn := &fakeConn{}
-	a := h.Register("pc1", "PC1", "ana", agentConn)
+	a := h.Register("pc1", "PC1", "ana", "", agentConn)
 	v1, v2 := &fakeConn{}, &fakeConn{}
 
 	if _, err := h.Attach("pc1", "tec1", v1); err != nil {
@@ -107,7 +107,7 @@ func TestAttachOffline(t *testing.T) {
 
 func TestUnregisterClosesViewer(t *testing.T) {
 	h := New()
-	a := h.Register("pc1", "PC1", "ana", &fakeConn{})
+	a := h.Register("pc1", "PC1", "ana", "", &fakeConn{})
 	v := &fakeConn{}
 	h.Attach("pc1", "tec", v)
 	h.Unregister(a)
@@ -121,7 +121,7 @@ func TestUnregisterClosesViewer(t *testing.T) {
 
 func TestForward(t *testing.T) {
 	h := New()
-	a := h.Register("pc1", "PC1", "ana", &fakeConn{})
+	a := h.Register("pc1", "PC1", "ana", "", &fakeConn{})
 	a.Forward(BinaryMessage, strings.NewReader("sem técnico")) // não pode travar nem falhar
 
 	v := &fakeConn{}
@@ -140,10 +140,25 @@ func TestForward(t *testing.T) {
 
 func TestListSortedByHost(t *testing.T) {
 	h := New()
-	h.Register("b", "Zeta", "", &fakeConn{})
-	h.Register("a", "Alfa", "", &fakeConn{})
+	h.Register("b", "Zeta", "", "", &fakeConn{})
+	h.Register("a", "Alfa", "", "", &fakeConn{})
 	l := h.List()
 	if l[0].Host != "Alfa" || l[1].Host != "Zeta" {
 		t.Errorf("ordem = %v", l)
 	}
+}
+
+func TestKick(t *testing.T) {
+	h := New()
+	agentConn, v := &fakeConn{}, &fakeConn{}
+	h.Register("pc1", "PC1", "ana", "", agentConn)
+	if _, err := h.Attach("pc1", "tec1", v); err != nil {
+		t.Fatal(err)
+	}
+
+	h.Kick("pc1")
+	if !agentConn.closed {
+		t.Fatal("máquina removida continuou conectada")
+	}
+	h.Kick("offline") // não pode entrar em pânico
 }

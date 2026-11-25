@@ -40,7 +40,10 @@ type Config struct {
 	// desliga o recurso: a mensagem é ignorada em vez de travar o processo.
 	Lock      func()
 	NewStream func(media.Sender) Stream
-	Logger    *slog.Logger
+	// OnActive, se definido, é avisado quando um técnico entra (true) e sai
+	// (false). A atualização automática espera o fim do atendimento.
+	OnActive func(active bool)
+	Logger   *slog.Logger
 }
 
 // Controller trata as mensagens de uma conexão com o relay. Handle e Close
@@ -102,6 +105,9 @@ func (c *Controller) Close() { c.stop() }
 
 func (c *Controller) start() {
 	c.stop()
+	if c.cfg.OnActive != nil {
+		c.cfg.OnActive(true)
+	}
 	ctx, cancel := context.WithCancel(context.Background())
 	t := &transmission{cancel: cancel, stream: c.cfg.NewStream(c.send)}
 	c.cur = t
@@ -125,5 +131,8 @@ func (c *Controller) stop() {
 	if c.cur != nil {
 		c.cur.cancel()
 		c.cur = nil
+		if c.cfg.OnActive != nil {
+			c.cfg.OnActive(false)
+		}
 	}
 }

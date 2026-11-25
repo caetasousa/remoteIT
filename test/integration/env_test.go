@@ -30,6 +30,7 @@ import (
 	"remoteit/internal/relay/httpapi"
 	"remoteit/internal/relay/hub"
 	"remoteit/internal/relay/identity"
+	"remoteit/internal/relay/machines"
 	"remoteit/internal/relay/storage/postgres"
 )
 
@@ -58,7 +59,7 @@ func newEnv(t *testing.T, opts ...func(*httpapi.Config)) *env {
 	if err := db.Migrate(ctx); err != nil {
 		t.Fatal(err)
 	}
-	execSQL(t, `TRUNCATE users, sessions, access_log RESTART IDENTITY CASCADE`)
+	execSQL(t, `TRUNCATE users, sessions, access_log, machines, enrollment_codes RESTART IDENTITY CASCADE`)
 
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
 	ids := identity.NewService(db)
@@ -69,10 +70,14 @@ func newEnv(t *testing.T, opts ...func(*httpapi.Config)) *env {
 		Hub:      hub.New(),
 		Identity: ids,
 		Audit:    audit.New(db, logger),
+		Machines: machines.New(db),
 		AgentKey: agentKey,
-		Static:   fstest.MapFS{"index.html": {Data: []byte("console")}},
-		Health:   db.Ping,
-		Logger:   logger,
+		// os testes mais antigos usam agentes legados (chave compartilhada),
+		// que só administradores veem
+		LegacyAgents: true,
+		Static:       fstest.MapFS{"index.html": {Data: []byte("console")}},
+		Health:       db.Ping,
+		Logger:       logger,
 	}
 	for _, o := range opts {
 		o(&cfg)
@@ -184,7 +189,8 @@ func (e *env) realAgentWithLock(id string, ask consent.Asker, in *recordingInjec
 	enc := media.Encoders{JPEG: jpeg.New}
 	go func() {
 		defer close(done)
-		relayclient.Run(ctx, relayclient.Config{URL: e.wsURL(""), Key: agentKey, ID: id, Host: strings.ToUpper(id), User: "ana"},
+		relayclient.Run(ctx, relayclient.Config{URL: e.wsURL(""), Host: strings.ToUpper(id), User: "ana",
+			Auth: relayclient.LegacyKey{ID: id, Key: agentKey}},
 			func(send media.Sender) relayclient.Handler {
 				return session.New(session.Config{
 					Host: id, Consent: ask, Input: in, Lock: onLock, Logger: logger,
@@ -199,10 +205,8 @@ func (e *env) waitAgent(id string) {
 	e.t.Helper()
 	admin := e.login(adminUser, adminPass)
 	eventually(e.t, func() bool {
-		var list []hub.Info
-		admin.do("GET", "/api/agents", nil, &list)
-		for _, a := range list {
-			if a.ID == id {
+		for _, a := range admin.machines() {
+			if a.ID == id && a.Online {
 				return true
 			}
 		}
@@ -283,4 +287,58 @@ func sendJSON(t *testing.T, c *websocket.Conn, m protocol.Message) {
 	if err := c.WriteJSON(m); err != nil {
 		t.Fatal(err)
 	}
+}
+
+// machineView é uma linha de GET /api/agents.
+type machineView struct {
+	ID        string `json:"id"`
+	Name      string `json:"name"`
+	Owner     string `json:"owner"`
+	Legacy    bool   `json:"legacy"`
+	Online    bool   `json:"online"`
+	Version   string `json:"version"`
+	Busy      bool   `json:"busy"`
+	ViewedBy  string `json:"viewedBy"`
+	Mine      bool   `json:"mine"`
+	CanManage bool   `json:"canManage"`
+}
+
+func (c *client) machines() []machineView {
+	c.e.t.Helper()
+	var list []machineView
+	if s := c.do("GET", "/api/agents", nil, &list); s != http.StatusOK {
+		c.e.t.Fatalf("GET /api/agents: status %d", s)
+	}
+	return list
+}
+
+func (c *client) machine(id string) (machineView, bool) {
+	for _, m := range c.machines() {
+		if m.ID == id {
+			return m, true
+		}
+	}
+	return machineView{}, false
+}
+
+// ownMachine cadastra uma máquina no nome do usuário de c (pelo código de um
+// link de instalação dele) e a conecta como um agente falso, até o fim do
+// teste.
+func (c *client) ownMachine() (id string, ag *websocket.Conn) {
+	c.e.t.Helper()
+	var link struct{ Path string }
+	if s := c.do("POST", "/api/links", map[string]any{"edition": "portatil", "hours": 1, "uses": 1}, &link); s != http.StatusCreated {
+		c.e.t.Fatalf("criar link: status %d", s)
+	}
+	id, secret, s := c.e.enroll(strings.TrimPrefix(link.Path, "/i/"), "PC-TESTE")
+	if s != http.StatusCreated {
+		c.e.t.Fatalf("cadastrar máquina: status %d", s)
+	}
+	ag, _, err := c.e.machineAgent(id, secret)
+	if err != nil {
+		c.e.t.Fatal(err)
+	}
+	c.e.t.Cleanup(func() { ag.Close() })
+	eventually(c.e.t, func() bool { m, _ := c.machine(id); return m.Online }, "máquina não ficou online")
+	return id, ag
 }

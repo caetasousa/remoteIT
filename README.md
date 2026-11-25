@@ -24,6 +24,9 @@ graph LR
 | 🖵 | **Tela cheia** capturando Win, Alt+Tab e afins (Keyboard Lock API) | técnico |
 | 🔒 | **Bloquear a tela** remota (como Win+L) e **logar com outra conta** do Windows | técnico |
 | 🛡️ | **Tela de login e de bloqueio** acessíveis no modo serviço | — |
+| 🔐 | **Cada técnico com as suas máquinas**: o agente baixado (ou mandado por link) já sai no nome dele; só ele e os admins veem a máquina | técnico |
+| 🔗 | **Link de instalação** para o cliente baixar sem conta: com prazo e limite de máquinas, ou **permanente** | técnico |
+| 🪪 | **Credencial por máquina**: ninguém se passa por outro PC; **remover** revoga na hora | — |
 | 👥 | **Usuários e papéis**: administrador e técnico | admin |
 | ✉️ | **Criar conta** por e-mail (com aprovação do admin) e **recuperar acesso** por link de uso único | todos |
 | 📜 | **Auditoria**: quem acessou qual máquina, de onde, quando e por quanto tempo | admin |
@@ -214,8 +217,7 @@ make test-e2e          # 🌐 navegador real (Playwright) contra o compose (Dock
 * 🖵 Só o **monitor principal**; sem área de transferência, arquivos ou áudio.
 * ⌨️ **Ctrl+Alt+Del** não pode ser simulado (o Windows reserva essa combinação). Se a política do PC exigir Ctrl+Alt+Del antes do login, o login remoto para nessa tela.
 * 🌐 Proxy: respeita `HTTP_PROXY`/`HTTPS_PROXY`; proxy autenticado ou PAC do Windows, ainda não.
-* 🔑 Todos os agentes usam **a mesma chave**; não há revogação por máquina.
-* 🚪 O login **não tem limite de tentativas**: o bcrypt atrasa força bruta, mas não a impede.
+* 🏚️ Agentes antigos (de antes do cadastro por máquina) continuam aceitos como **legados**, visíveis só para admins, até as máquinas serem reinstaladas (`RELAY_LEGACY_AGENTS`).
 * 🧾 O `.exe` **não é assinado**: SmartScreen e antivírus podem bloquear (veja [docs/AGENTE-WINDOWS.md](docs/AGENTE-WINDOWS.md#antivirus)).
 * ❓ **Por que não WebRTC?** Com só a 443 TCP liberada, o WebRTC cairia em TURN sobre TCP: o mesmo transporte, com muito mais complexidade ([ADR 0004](docs/adr/0004-websocket-sobre-tcp.md)).
 

@@ -35,3 +35,25 @@ func TestClientKey(t *testing.T) {
 		}
 	}
 }
+
+func TestFailureLimitCountsOnlyFailures(t *testing.T) {
+	f := newFailureLimit()
+	for range loginFailuresPerUser {
+		if f.blocked("1.2.3.4", "ana") {
+			t.Fatal("bloqueou antes do limite")
+		}
+		f.failed("1.2.3.4", "ana")
+	}
+	if !f.blocked("5.6.7.8", "ana") {
+		t.Error("usuário atacado de outro IP deveria ficar bloqueado")
+	}
+	if f.blocked("1.2.3.4", "bia") {
+		t.Error("outro usuário no mesmo IP ainda tem tentativas")
+	}
+	for range loginFailuresPerIP - loginFailuresPerUser {
+		f.failed("1.2.3.4", "bia")
+	}
+	if !f.blocked("1.2.3.4", "carla") {
+		t.Error("IP com muitas falhas deveria ficar bloqueado para qualquer usuário")
+	}
+}

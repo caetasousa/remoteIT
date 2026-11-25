@@ -15,9 +15,9 @@ import (
 
 	"github.com/gorilla/websocket"
 
+	"remoteit/internal/protocol"
 	"remoteit/internal/relay/audit"
 	"remoteit/internal/relay/httpapi"
-	"remoteit/internal/relay/hub"
 	"remoteit/internal/relay/identity"
 )
 
@@ -78,10 +78,9 @@ func TestAgentAppearsAndLeaves(t *testing.T) {
 	ag.Close()
 	admin := e.login(adminUser, adminPass)
 	eventually(t, func() bool {
-		var list []hub.Info
-		admin.do("GET", "/api/agents", nil, &list)
-		return len(list) == 0
-	}, "agente desconectado continua na lista")
+		m, ok := admin.machine("pc1")
+		return ok && !m.Online && m.Legacy
+	}, "agente desconectado continua online na lista")
 }
 
 func TestViewerBridgesAgent(t *testing.T) {
@@ -146,10 +145,8 @@ func TestSecondViewerTakesOver(t *testing.T) {
 	if _, _, err := v1.ReadMessage(); err == nil {
 		t.Error("primeiro técnico deveria ter sido desconectado")
 	}
-	var list []hub.Info
-	admin.do("GET", "/api/agents", nil, &list)
-	if !list[0].Busy || list[0].ViewedBy != adminUser {
-		t.Errorf("info = %+v", list[0])
+	if m, _ := admin.machine("pc1"); !m.Busy || m.ViewedBy != adminUser {
+		t.Errorf("info = %+v", m)
 	}
 }
 
@@ -267,13 +264,9 @@ func TestRemovedUserLosesOpenViewer(t *testing.T) {
 	if s := admin.do("POST", "/api/users", map[string]string{"username": "saindo", "password": "senha-saindo", "role": "technician"}, &u); s != http.StatusCreated {
 		t.Fatalf("cadastrar: status %d", s)
 	}
-	ag, err := e.rawAgent("pc1", agentKey)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer ag.Close()
-	e.waitAgent("pc1")
-	v, _, err := e.login("saindo", "senha-saindo").viewer("pc1")
+	saindo := e.login("saindo", "senha-saindo")
+	pc, ag := saindo.ownMachine()
+	v, _, err := saindo.viewer(pc)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -362,7 +355,7 @@ func TestAuditClientIPHeader(t *testing.T) {
 // arquivo novo, e só para quem está logado.
 func TestAgentDownloadIsNeverCached(t *testing.T) {
 	exe := filepath.Join(t.TempDir(), "suporte-ti.exe")
-	if err := os.WriteFile(exe, []byte("versao-antiga"), 0o644); err != nil {
+	if err := os.WriteFile(exe, fakeExe("versao-antiga"), 0o644); err != nil {
 		t.Fatal(err)
 	}
 	e := newEnv(t, func(c *httpapi.Config) { c.AgentExe = exe })
@@ -387,7 +380,7 @@ func TestAgentDownloadIsNeverCached(t *testing.T) {
 	}
 
 	body, h := get()
-	if body != "versao-antiga" {
+	if !strings.HasPrefix(body, "versao-antiga") {
 		t.Fatalf("corpo = %q", body)
 	}
 	if cc := h.Get("Cache-Control"); !strings.Contains(cc, "no-store") || !strings.Contains(cc, "private") {
@@ -395,10 +388,10 @@ func TestAgentDownloadIsNeverCached(t *testing.T) {
 	}
 
 	// como no deploy: o arquivo é substituído com o relay no ar
-	if err := os.WriteFile(exe, []byte("versao-nova"), 0o644); err != nil {
+	if err := os.WriteFile(exe, fakeExe("versao-nova"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	if body, _ := get(); body != "versao-nova" {
+	if body, _ := get(); !strings.HasPrefix(body, "versao-nova") {
 		t.Errorf("depois de trocar o arquivo veio %q, want versao-nova", body)
 	}
 }
@@ -407,8 +400,8 @@ func TestAgentDownloadIsNeverCached(t *testing.T) {
 func TestBothAgentEditionsDownload(t *testing.T) {
 	dir := t.TempDir()
 	portable, service := filepath.Join(dir, "suporte-ti.exe"), filepath.Join(dir, "suporte-ti-servico.exe")
-	os.WriteFile(portable, []byte("portatil"), 0o644)
-	os.WriteFile(service, []byte("servico"), 0o644)
+	os.WriteFile(portable, fakeExe("portatil"), 0o644)
+	os.WriteFile(service, fakeExe("servico"), 0o644)
 	e := newEnv(t, func(c *httpapi.Config) { c.AgentExe, c.AgentServiceExe = portable, service })
 
 	if s := e.anonymous().do("GET", "/download/agent-servico.exe", nil, nil); s != http.StatusUnauthorized {
@@ -425,11 +418,17 @@ func TestBothAgentEditionsDownload(t *testing.T) {
 		}
 		b, _ := io.ReadAll(resp.Body)
 		resp.Body.Close()
-		if string(b) != want[0] || !strings.Contains(resp.Header.Get("Content-Disposition"), want[1]) {
+		if !strings.HasPrefix(string(b), want[0]) || !strings.Contains(resp.Header.Get("Content-Disposition"), want[1]) {
 			t.Errorf("%s: corpo %q, disposition %q", path, b, resp.Header.Get("Content-Disposition"))
 		}
 		if !strings.Contains(resp.Header.Get("Cache-Control"), "no-store") {
 			t.Errorf("%s: sem no-store", path)
 		}
 	}
+}
+
+// fakeExe é um "executável" com o espaço do código de cadastro, como o
+// build.sh gera.
+func fakeExe(content string) []byte {
+	return []byte(content + protocol.EnrollMarker + protocol.EnrollEmpty + "fim")
 }

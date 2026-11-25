@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { api, setUnauthorizedHandler, type AgentInfo, type User } from './lib/api';
+  import { api, setUnauthorizedHandler, type Machine, type User } from './lib/api';
   import Login from './components/Login.svelte';
   import AgentList from './components/AgentList.svelte';
   import Viewer from './components/Viewer.svelte';
@@ -17,7 +17,7 @@
   let user = $state<User | null>(null);
   let loading = $state(true);
   let tab = $state<Tab>('agents');
-  let viewing = $state<AgentInfo | null>(null);
+  let viewing = $state<Machine | null>(null);
 
   let link = $state(takeAccountLink());
   let accounts = $state(false);
@@ -115,7 +115,7 @@
     {#if accounts && !user.email}<LinkEmail />{/if}
     <main>
       {#if tab === 'agents'}
-        <AgentList onConnect={(a) => (viewing = a)} />
+        <AgentList me={user} onConnect={(a) => (viewing = a)} />
       {:else if tab === 'users'}
         <Users me={user} />
       {:else}

@@ -9,6 +9,19 @@ O formato segue o [Keep a Changelog](https://keepachangelog.com/pt-BR/1.1.0/) e 
 
 ### Added
 
+- **Cada técnico com as suas máquinas** ([ADR 0010](docs/adr/0010-maquinas-por-tecnico.md)): o `.exe`
+  baixado sai marcado com um código do técnico; na primeira execução a máquina troca o código por
+  uma credencial própria (ID aleatório, DPAPI) e fica no nome dele. Só o dono e os admins veem e
+  acessam; **Remover** revoga a credencial. Não há compartilhamento entre técnicos.
+- **Link de instalação** (`/i/<código>`): o cliente baixa o agente sem conta; validade de 1 hora a
+  7 dias ou **sem prazo**, de 1 a 100 máquinas ou **sem limite**, revogável.
+- **Atualização automática do agente** ([ADR 0011](docs/adr/0011-atualizacao-automatica.md)): versão
+  em cada `.exe`, `dist/update.json` assinado com uma chave Ed25519 do projeto (`cmd/signupdate`), e o
+  agente se troca sozinho, fora de atendimento, quando o relay anuncia outra versão. Coluna **Versão**
+  no console.
+- `RELAY_LEGACY_AGENTS`: agentes antigos continuam aceitos (só admins veem) até serem reinstalados.
+- Rotas `/api/machines/{id}`, `/api/links`, `/api/agent/enroll`, `/i/{code}`.
+
 - Criação de conta por e-mail, com aprovação de um administrador, e recuperação de acesso.
 - Associação de e-mail às contas existentes e login por usuário ou e-mail.
 - `RELAY_ADMIN_EMAIL`: primeiro administrador sem senha no ambiente.
@@ -67,6 +80,11 @@ O formato segue o [Keep a Changelog](https://keepachangelog.com/pt-BR/1.1.0/) e 
 - O download do agente podia vir de cache (Cloudflare/navegador) e entregar uma versão antiga.
 
 ### Security
+
+- Uma máquina não consegue mais se passar por outra usando o mesmo nome de computador.
+- Limite de senhas erradas no login (10 por usuário / 20 por IP em 15 min).
+- Content-Security-Policy, `X-Frame-Options`, `nosniff` e `Referrer-Policy` em todas as respostas.
+- Acessos deixados abertos por um reinício do relay são encerrados na partida.
 
 - WebSocket do técnico só aceita a mesma origem do relay (proteção contra Cross-Site WebSocket Hijacking).
 - Sessões guardam só o SHA-256 do token; login responde no mesmo tempo para usuário inexistente.

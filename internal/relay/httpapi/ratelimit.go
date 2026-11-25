@@ -57,3 +57,44 @@ func clientKey(addr string) string {
 	}
 	return ip.String()
 }
+
+// Limites de login: falhas, não tentativas. Quem acerta a senha nunca é
+// barrado por quem errou antes no mesmo escritório, até o limite por IP.
+const (
+	loginFailuresPerIP   = 20
+	loginFailuresPerUser = 10
+	loginFailureWindow   = 15 * time.Minute
+)
+
+// failureLimit barra o login depois de muitas senhas erradas, por IP e por
+// usuário: contra força bruta de um lugar só e contra um usuário-alvo
+// atacado de vários lugares.
+type failureLimit struct {
+	byIP, byUser *rateLimit
+}
+
+func newFailureLimit() *failureLimit {
+	return &failureLimit{
+		byIP:   newRateLimit(loginFailuresPerIP, loginFailureWindow),
+		byUser: newRateLimit(loginFailuresPerUser, loginFailureWindow),
+	}
+}
+
+func (f *failureLimit) blocked(ip, user string) bool {
+	return f.byIP.reached(ip) || f.byUser.reached(user)
+}
+
+func (f *failureLimit) failed(ip, user string) {
+	f.byIP.allow(ip)
+	f.byUser.allow(user)
+}
+
+// reached informa, sem contar, se key já esgotou a janela atual.
+func (l *rateLimit) reached(key string) bool {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	if now := l.now(); now.Sub(l.since) >= l.window {
+		l.since, l.hits = now, map[string]int{}
+	}
+	return l.hits[key] >= l.max
+}

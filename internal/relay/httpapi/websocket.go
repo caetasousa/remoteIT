@@ -1,12 +1,16 @@
 package httpapi
 
 import (
+	"context"
+	"errors"
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/gorilla/websocket"
 
 	"remoteit/internal/relay/audit"
+	"remoteit/internal/relay/machines"
 )
 
 const (
@@ -18,12 +22,38 @@ const (
 	maxField  = 64
 )
 
+// agentWS aceita duas formas de agente:
+//
+//   - cadastrado: ?mid=<id da máquina> e "Authorization: Bearer <credencial>".
+//     401 = máquina desconhecida ou credencial errada (o agente pode se
+//     cadastrar de novo); 403 = máquina removida (não deve voltar sozinha);
+//   - legado: ?id=<nome do computador>&key=<chave compartilhada>, só com
+//     LegacyAgents ligado. Aparece apenas para administradores.
 func (s *server) agentWS(w http.ResponseWriter, r *http.Request) {
 	q := r.URL.Query()
-	id := q.Get("id")
-	if !equalSecret(q.Get("key"), s.AgentKey) || id == "" || len(id) > maxField {
-		http.Error(w, "forbidden", http.StatusForbidden)
-		return
+	host, user := truncate(q.Get("host")), truncate(q.Get("user"))
+	var id string
+	if mid := q.Get("mid"); mid != "" {
+		if !s.authMachine(w, r, mid) {
+			return
+		}
+		id = mid
+		s.Machines.Seen(r.Context(), id, host)
+	} else {
+		id = q.Get("id")
+		if !s.LegacyAgents || s.AgentKey == "" || !equalSecret(q.Get("key"), s.AgentKey) || !machines.ValidLegacyID(id) {
+			http.Error(w, "forbidden", http.StatusForbidden)
+			return
+		}
+		switch err := s.Machines.SeenLegacy(r.Context(), id, host); {
+		case errors.Is(err, machines.ErrRevoked):
+			http.Error(w, "máquina removida", http.StatusForbidden)
+			return
+		case err != nil:
+			s.Logger.Error("registrar agente legado", "err", err)
+			http.Error(w, "erro interno", http.StatusInternalServerError)
+			return
+		}
 	}
 	c, err := s.upgrader.Upgrade(w, r, nil)
 	if err != nil {
@@ -31,10 +61,13 @@ func (s *server) agentWS(w http.ResponseWriter, r *http.Request) {
 	}
 	defer c.Close()
 
-	a := s.Hub.Register(id, truncate(q.Get("host")), truncate(q.Get("user")), c)
+	a := s.Hub.Register(id, host, user, truncate(q.Get("ver")), c)
 	s.Logger.Info("agente conectado", "id", a.ID, "host", a.Host, "user", a.User)
 	defer func() {
 		s.Hub.Unregister(a)
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		s.Machines.Seen(ctx, a.ID, a.Host) // "visto por último" = quando caiu
 		s.Logger.Info("agente desconectado", "id", a.ID)
 	}()
 
@@ -70,6 +103,16 @@ func (s *server) agentWS(w http.ResponseWriter, r *http.Request) {
 func (s *server) viewerWS(w http.ResponseWriter, r *http.Request) {
 	user := userFrom(r.Context())
 	id := r.URL.Query().Get("id")
+	switch ok, err := s.Machines.CanAccess(r.Context(), actorOf(user), id); {
+	case err != nil:
+		s.Logger.Error("conferir acesso à máquina", "err", err)
+		http.Error(w, "erro interno", http.StatusInternalServerError)
+		return
+	case !ok:
+		// mesma resposta para "não existe" e "não é sua": não revela máquinas alheias
+		http.Error(w, "máquina não encontrada", http.StatusNotFound)
+		return
+	}
 	agent := s.Hub.Get(id)
 	if agent == nil {
 		http.Error(w, "agente offline", http.StatusNotFound)
@@ -120,6 +163,25 @@ func (s *server) viewerWS(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
+}
+
+// authMachine confere a credencial da máquina mid (Authorization: Bearer).
+// Responde e devolve false se não passar: 401 credencial inválida (o agente
+// pode se cadastrar de novo), 403 máquina removida.
+func (s *server) authMachine(w http.ResponseWriter, r *http.Request, mid string) bool {
+	secret := strings.TrimPrefix(r.Header.Get("Authorization"), "Bearer ")
+	switch err := s.Machines.Authenticate(r.Context(), mid, secret); {
+	case errors.Is(err, machines.ErrUnauthorized):
+		http.Error(w, "credencial da máquina inválida", http.StatusUnauthorized)
+	case errors.Is(err, machines.ErrRevoked):
+		http.Error(w, "máquina removida", http.StatusForbidden)
+	case err != nil:
+		s.Logger.Error("autenticar máquina", "err", err)
+		http.Error(w, "erro interno", http.StatusInternalServerError)
+	default:
+		return true
+	}
+	return false
 }
 
 // clientAddr devolve o endereço do técnico: o cabeçalho confiável, se

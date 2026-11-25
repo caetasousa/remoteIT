@@ -7,6 +7,7 @@ import (
 	"mime"
 	"net/http"
 	"strconv"
+	"strings"
 	"time"
 
 	"remoteit/internal/relay/identity"
@@ -90,8 +91,14 @@ func (s *server) login(w http.ResponseWriter, r *http.Request) {
 	if !decodeJSON(w, r, &in) {
 		return
 	}
+	ip, who := clientKey(s.clientAddr(r)), strings.ToLower(strings.TrimSpace(in.Username))
+	if s.loginLimit.blocked(ip, who) {
+		writeError(w, http.StatusTooManyRequests, "muitas senhas erradas; tente de novo em 15 minutos")
+		return
+	}
 	token, u, err := s.Identity.Login(r.Context(), in.Username, in.Password)
 	if errors.Is(err, identity.ErrInvalidCredentials) {
+		s.loginLimit.failed(ip, who)
 		writeError(w, http.StatusUnauthorized, "usuário ou senha inválidos")
 		return
 	}
@@ -126,10 +133,6 @@ func (s *server) logout(w http.ResponseWriter, r *http.Request) {
 
 func (s *server) me(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, userFrom(r.Context()))
-}
-
-func (s *server) listAgents(w http.ResponseWriter, r *http.Request) {
-	writeJSON(w, http.StatusOK, s.Hub.List())
 }
 
 func (s *server) listUsers(w http.ResponseWriter, r *http.Request) {

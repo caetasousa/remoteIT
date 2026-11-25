@@ -30,6 +30,7 @@ services:
     environment:
       DATABASE_URL: postgres://remoteit:${POSTGRES_PASSWORD}@db:5432/remoteit?sslmode=disable
       RELAY_AGENT_KEY: ${RELAY_AGENT_KEY:?defina RELAY_AGENT_KEY no .env}
+      RELAY_LEGACY_AGENTS: ${RELAY_LEGACY_AGENTS:-true}
       RELAY_ADMIN_USER: ${RELAY_ADMIN_USER:-admin}
       RELAY_ADMIN_PASS: ${RELAY_ADMIN_PASS:-}
       RELAY_CLIENT_IP_HEADER: ${RELAY_CLIENT_IP_HEADER:-}

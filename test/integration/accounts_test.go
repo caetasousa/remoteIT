@@ -305,14 +305,9 @@ func TestResetPassword(t *testing.T) {
 	admin := e.login(adminUser, adminPass)
 	expect(t, "aprovar", admin.do("POST", "/api/users/"+strconv.FormatInt(u.ID, 10)+"/approve", nil, nil), 200)
 	box.wait("ana@example.test", 3)
-	ag, err := e.rawAgent("pc1", agentKey)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer ag.Close()
-	e.waitAgent("pc1")
 	ana := e.login("ana", "senha-dois")
-	v, _, err := ana.viewer("pc1")
+	pc, ag := ana.ownMachine()
+	v, _, err := ana.viewer(pc)
 	if err != nil {
 		t.Fatal(err)
 	}

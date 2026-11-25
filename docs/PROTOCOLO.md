@@ -10,7 +10,8 @@
 
 | Quem | URL | Autenticação |
 |---|---|---|
-| 🖥️ Agente → relay | `wss://relay/ws/agent?id=&host=&user=&key=` | `key` = `RELAY_AGENT_KEY` |
+| 🖥️ Agente → relay | `wss://relay/ws/agent?mid=&host=&user=` | `Authorization: Bearer <credencial da máquina>` (cadastro em [FLUXOS.md](FLUXOS.md#maquinas)) |
+| 🏚️ Agente legado → relay | `wss://relay/ws/agent?id=&host=&user=&key=` | `key` = `RELAY_AGENT_KEY`, só com `RELAY_LEGACY_AGENTS` |
 | 🧑‍💻 Técnico → relay | `wss://relay/ws/viewer?id=<agente>` | cookie de sessão + `Origin` igual ao host |
 
 ```mermaid
@@ -72,7 +73,7 @@ Todas têm o campo `t` com o tipo. Campos com valor zero são omitidos.
 
 ```
 offset  tamanho  campo
-0       1        codec: 1 = H.264 (Annex-B), 2 = JPEG
+0       1        codec: 1 = H.264 (Annex-B), 2 = JPEG, 3 = PNG (refresh)
 1       1        flags: bit 0 = keyframe
 2       2        largura   (big-endian)
 4       2        altura    (big-endian)
@@ -91,11 +92,15 @@ offset  tamanho  campo
 ├───────────────────────────────┼───────────────────────────────┤
 │       sequência (baixo)       │          reservado            │
 ├───────────────────────────────┴───────────────────────────────┤
-│                     payload (H.264 ou JPEG) ...               │
+│                 payload (H.264, JPEG ou PNG) ...              │
 ```
 
 * 🔢 A `sequência` é a mesma que o navegador devolve no `ack`.
 * 🔑 Depois de um `kf`, de trocar de preset ou de reabrir a captura, o próximo quadro H.264 é keyframe.
+* 🔍 **PNG (codec 3) é o refresh de nitidez:** uma imagem sem perda que o agente manda **uma vez** quando a
+  tela fica parada por 300 ms ([ADR 0009](adr/0009-refresh-de-nitidez.md)). Não é vídeo: o navegador
+  só a desenha por cima do último quadro se tiver o mesmo tamanho e se nenhum quadro de vídeo chegou
+  enquanto ela era decodificada. Também recebe `ack`, como qualquer quadro.
 
 ---
 

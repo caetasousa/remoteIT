@@ -31,7 +31,7 @@
   }
 
   async function approve(u: User) {
-    if (!confirm(`Aprovar ${u.username} (${u.email})? A conta poderá acessar todas as máquinas.`)) return;
+    if (!confirm(`Aprovar ${u.username} (${u.email})? A conta verá as máquinas dos agentes e links que ela gerar.`)) return;
     error = '';
     try {
       await api.approveUser(u.id);
@@ -59,7 +59,7 @@
   seq="02"
   name="Usuários"
   title="Quem tem acesso."
-  description="Uma conta ativa acessa todas as máquinas. Aprove só quem você conhece."
+  description="Cada técnico vê só as máquinas dos agentes e links dele; administradores veem todas. Aprove só quem você conhece."
   readings={[
     { label: 'Ativos', value: users.length - pending, on: users.length > pending },
     { label: 'Aguardando', value: pending, on: pending > 0 },

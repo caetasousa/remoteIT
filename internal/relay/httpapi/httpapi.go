@@ -3,7 +3,7 @@
 // frontend.
 //
 // Este pacote só traduz HTTP para chamadas aos contextos [hub],
-// [identity] e [audit]; as regras ficam neles.
+// [identity], [machines] e [audit]; as regras ficam neles.
 //
 // Rotas:
 //
@@ -17,16 +17,25 @@
 //	POST   /api/account/reset/complete    público + link: troca a senha
 //	POST   /api/account/email             pede link para associar e-mail
 //	POST   /api/account/email/complete    link: associa o e-mail
-//	GET    /api/agents          máquinas online
+//	GET    /api/agents          máquinas que o usuário acessa (online e offline)
+//	DELETE /api/machines/{id}   remove (revoga) a máquina
+//	GET    /api/links           links de instalação válidos do técnico
+//	POST   /api/links           cria um link de instalação
+//	DELETE /api/links/{id}      revoga um link
+//	POST   /api/agent/enroll    público + código: cadastra uma máquina
+//	GET    /api/agent/update?mid=&edition=  máquina: versão disponível (assinada)
+//	GET    /api/agent/update/{edition}?mid= máquina: .exe da atualização
 //	GET    /api/users           admin: lista usuários
 //	POST   /api/users           admin: cadastra usuário
 //	POST   /api/users/{id}/approve  admin: aprova conta pendente
 //	DELETE /api/users/{id}      admin: remove usuário
 //	GET    /api/audit           admin: últimos acessos
 //	GET    /ws/viewer?id=       WebSocket do técnico
-//	GET    /ws/agent?key=&id=   WebSocket do agente (autenticado pela chave)
-//	GET    /download/agent.exe          agente portátil (só executa), se configurado
-//	GET    /download/agent-servico.exe  agente que instala o serviço, se configurado
+//	GET    /ws/agent?mid=       WebSocket do agente (credencial da máquina no Authorization)
+//	GET    /ws/agent?key=&id=   WebSocket de agente legado (chave compartilhada)
+//	GET    /download/agent.exe          agente portátil, marcado com um código do técnico
+//	GET    /download/agent-servico.exe  agente que instala o serviço, marcado
+//	GET    /i/{code}            público: .exe de um link de instalação
 //	GET    /healthz             público: relay e banco respondendo
 //	GET    /                    arquivos do console (Svelte)
 package httpapi
@@ -45,6 +54,7 @@ import (
 	"remoteit/internal/relay/audit"
 	"remoteit/internal/relay/hub"
 	"remoteit/internal/relay/identity"
+	"remoteit/internal/relay/machines"
 )
 
 // Config reúne as dependências do servidor HTTP.
@@ -54,14 +64,22 @@ type Config struct {
 	Audit    *audit.Log
 	// Accounts é nil quando não há SMTP: cadastro e recuperação respondem 503.
 	Accounts *identity.Accounts
-	// AgentKey é a chave compartilhada que os agentes enviam em ?key=.
+	Machines *machines.Service
+	// AgentKey é a chave compartilhada dos agentes legados (?key=). Vazia, ou
+	// com LegacyAgents falso, só máquinas cadastradas conectam.
 	AgentKey string
-	// AgentExe é o caminho do .exe servido em /download/agent.exe. Vazio
-	// desativa a rota.
+	// LegacyAgents aceita agentes antigos, sem cadastro, enquanto as máquinas
+	// não são reinstaladas. Eles aparecem só para administradores.
+	LegacyAgents bool
+	// AgentExe é o caminho do .exe portátil, servido (marcado com o código do
+	// técnico) em /download/agent.exe e pelos links de instalação.
 	AgentExe string
 	// AgentServiceExe é o .exe da edição de serviço, servido em
 	// /download/agent-servico.exe. Vazio desativa a rota.
 	AgentServiceExe string
+	// UpdateManifest é o update.json do build.sh (versão e assinaturas dos
+	// .exe). Vazio ou ausente: nenhuma atualização é oferecida.
+	UpdateManifest string
 	// Static contém o build do frontend, com index.html na raiz.
 	Static fs.FS
 	// Health confere dependências externas (o banco). Nil = sempre saudável.
@@ -76,20 +94,28 @@ type Config struct {
 
 type server struct {
 	Config
-	upgrader   websocket.Upgrader
-	emailLimit *rateLimit
+	upgrader    websocket.Upgrader
+	emailLimit  *rateLimit
+	loginLimit  *failureLimit
+	enrollLimit *rateLimit
+	linkLimit   *rateLimit
 }
 
 // New monta o handler HTTP do relay.
 func New(cfg Config) http.Handler {
-	s := &server{Config: cfg, emailLimit: newRateLimit(emailRequestsPerHour, time.Hour), upgrader: websocket.Upgrader{
-		ReadBufferSize:  64 << 10,
-		WriteBufferSize: 64 << 10,
-		// CheckOrigin padrão: só aceita Origin igual ao Host. Como o técnico é
-		// autenticado por cookie, isso impede que outro site abra um WebSocket
-		// em nome dele (Cross-Site WebSocket Hijacking). O agente não envia
-		// Origin e por isso passa.
-	}}
+	s := &server{Config: cfg,
+		emailLimit:  newRateLimit(emailRequestsPerHour, time.Hour),
+		loginLimit:  newFailureLimit(),
+		enrollLimit: newRateLimit(enrollsPerHour, time.Hour),
+		linkLimit:   newRateLimit(linkDownloadsPerDay, 24*time.Hour),
+		upgrader: websocket.Upgrader{
+			ReadBufferSize:  64 << 10,
+			WriteBufferSize: 64 << 10,
+			// CheckOrigin padrão: só aceita Origin igual ao Host. Como o técnico é
+			// autenticado por cookie, isso impede que outro site abra um WebSocket
+			// em nome dele (Cross-Site WebSocket Hijacking). O agente não envia
+			// Origin e por isso passa.
+		}}
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("POST /api/login", s.login)
@@ -103,7 +129,14 @@ func New(cfg Config) http.Handler {
 	mux.Handle("POST /api/account/email", s.auth(s.emailRoute(s.requestLink)))
 	mux.Handle("POST /api/account/email/complete", s.auth(s.accountRoute(s.confirmLink)))
 	mux.Handle("POST /api/users/{id}/approve", s.admin(http.HandlerFunc(s.approveUser)))
-	mux.Handle("GET /api/agents", s.auth(http.HandlerFunc(s.listAgents)))
+	mux.Handle("GET /api/agents", s.auth(http.HandlerFunc(s.listMachines)))
+	mux.Handle("DELETE /api/machines/{id}", s.auth(http.HandlerFunc(s.removeMachine)))
+	mux.Handle("GET /api/links", s.auth(http.HandlerFunc(s.listLinks)))
+	mux.Handle("POST /api/links", s.auth(http.HandlerFunc(s.createLink)))
+	mux.Handle("DELETE /api/links/{id}", s.auth(http.HandlerFunc(s.revokeLink)))
+	mux.HandleFunc("POST /api/agent/enroll", s.enrollAgent)
+	mux.HandleFunc("GET /api/agent/update", s.updateOffer)
+	mux.HandleFunc("GET /api/agent/update/{edition}", s.updateDownload)
 	mux.Handle("GET /api/users", s.admin(http.HandlerFunc(s.listUsers)))
 	mux.Handle("POST /api/users", s.admin(http.HandlerFunc(s.createUser)))
 	mux.Handle("DELETE /api/users/{id}", s.admin(http.HandlerFunc(s.deleteUser)))
@@ -111,14 +144,44 @@ func New(cfg Config) http.Handler {
 	mux.Handle("GET /ws/viewer", s.auth(http.HandlerFunc(s.viewerWS)))
 	mux.HandleFunc("GET /ws/agent", s.agentWS)
 	if cfg.AgentExe != "" {
-		mux.Handle("GET /download/agent.exe", s.auth(download(cfg.AgentExe, "suporte-ti.exe")))
+		mux.Handle("GET /download/agent.exe", s.auth(s.download(machines.EditionPortable)))
 	}
 	if cfg.AgentServiceExe != "" {
-		mux.Handle("GET /download/agent-servico.exe", s.auth(download(cfg.AgentServiceExe, "suporte-ti-servico.exe")))
+		mux.Handle("GET /download/agent-servico.exe", s.auth(s.download(machines.EditionService)))
 	}
+	mux.HandleFunc("GET /i/{code}", s.installLink)
 	mux.HandleFunc("GET /healthz", s.healthz)
 	mux.Handle("GET /", staticHandler(cfg.Static))
-	return mux
+	return securityHeaders(mux)
+}
+
+// securityHeaders aplica a todas as respostas as defesas do navegador: CSP
+// (só scripts e conexões do próprio relay), nada de iframe de outros sites
+// (clickjacking), nada de adivinhar o tipo do arquivo e nada de vazar a URL
+// (que pode ter um link de uso único) para outros sites.
+//
+// style-src aceita 'unsafe-inline' porque o Svelte aplica estilos dinâmicos
+// em atributos style (tamanho do canvas, posição do cursor remoto); scripts
+// inline continuam proibidos, que é o que importa contra XSS.
+func securityHeaders(next http.Handler) http.Handler {
+	const csp = "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; " +
+		"img-src 'self' data: blob:; font-src 'self' data:; " +
+		"object-src 'none'; base-uri 'none'; form-action 'self'; frame-ancestors 'none'; connect-src 'self'"
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		h := w.Header()
+		// o WebSocket da tela remota vai para o próprio host; alguns
+		// navegadores não contam ws/wss como 'self'. Ecoar o Host aqui é
+		// seguro: a CSP só restringe, nunca libera algo além do que já liberava.
+		connect := ""
+		if host := r.Host; host != "" && !strings.ContainsAny(host, " ;,'\"") {
+			connect = " wss://" + host + " ws://" + host
+		}
+		h.Set("Content-Security-Policy", csp+connect)
+		h.Set("X-Content-Type-Options", "nosniff")
+		h.Set("X-Frame-Options", "DENY")
+		h.Set("Referrer-Policy", "no-referrer")
+		next.ServeHTTP(w, r)
+	})
 }
 
 func (s *server) healthz(w http.ResponseWriter, r *http.Request) {
@@ -129,19 +192,6 @@ func (s *server) healthz(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	w.Write([]byte("ok"))
-}
-
-// download serve o arquivo em path com o nome name para o navegador.
-func download(path, name string) http.Handler {
-	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Content-Disposition", `attachment; filename="`+name+`"`)
-		// Sem isso o Cloudflare (que guarda .exe por padrão) e o navegador
-		// continuavam entregando um agente antigo depois de cada deploy.
-		// private também impede que um cache compartilhado guarde um arquivo
-		// que só sai para quem está logado.
-		w.Header().Set("Cache-Control", "no-store, private")
-		http.ServeFile(w, r, path)
-	})
 }
 
 // staticHandler serve o build do Vite. index.html nunca vai para cache (o

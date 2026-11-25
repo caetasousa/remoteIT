@@ -1,10 +1,10 @@
 <script lang="ts">
-  import type { AgentInfo } from '../lib/api';
+  import type { Machine } from '../lib/api';
   import { PRESETS, type Preset } from '../lib/protocol';
   import { attachInput, sendCtrlShiftEsc, sendLock } from '../lib/viewer/input';
   import { ViewerSession, type Stats, type StatusLevel } from '../lib/viewer/session';
 
-  let { agent, onBack }: { agent: AgentInfo; onBack: () => void } = $props();
+  let { agent, onBack }: { agent: Machine; onBack: () => void } = $props();
 
   // Keyboard Lock API (Chrome/Edge): ainda fora do lib.dom do TypeScript.
   type KeyboardLock = { lock(): Promise<void>; unlock(): void };
@@ -24,18 +24,69 @@
   let hint = $state(false);
   let remoteCursor = $state<{ left: number; top: number } | null>(null);
 
+  // Modo de exibição, lembrado entre sessões:
+  // - fit: cabe na janela (padrão);
+  // - real: um pixel remoto = um pixel físico do monitor, com rolagem se não
+  //   couber. É o mais nítido: o navegador não precisa interpolar nada.
+  type Zoom = 'fit' | 'real';
+  const ZOOM_KEY = 'remoteit.zoom';
+  let zoom = $state<Zoom>(localStorage.getItem(ZOOM_KEY) === 'real' ? 'real' : 'fit');
+
   // o RTT é a leitura que mais pesa na sensação de controle: cor por faixa
   const rttLevel = $derived<StatusLevel>(!stats ? '' : stats.rtt < 80 ? 'ok' : stats.rtt < 200 ? 'warn' : 'bad');
 
-  // Ajusta o tamanho exibido do canvas para o maior retângulo que cabe no palco
-  // mantendo a proporção do quadro. Mantém a caixa do <canvas> igual à imagem,
-  // para o mapeamento de clique e cursor (que usa getBoundingClientRect) valer.
+  // Calcula tamanho e posição do canvas na tela. Mantém a caixa do <canvas>
+  // igual à imagem, para o mapeamento de clique e cursor (que usa
+  // getBoundingClientRect) valer.
+  //
+  // A conta é feita em pixels FÍSICOS do monitor (CSS px × devicePixelRatio),
+  // não em CSS px: com o Windows em 125% ou 150%, 1 CSS px não é 1 pixel da
+  // tela, e uma imagem "do tamanho certo" em CSS px ainda sai interpolada
+  // (borrada). Tamanho e margens são arredondados para pixels físicos
+  // inteiros pelo mesmo motivo: meio pixel de deslocamento já borra o texto.
   function fitCanvas() {
     if (!canvas || !stage || !canvas.width || !canvas.height) return;
-    const box = stage.getBoundingClientRect();
-    const scale = Math.min(box.width / canvas.width, box.height / canvas.height);
-    canvas.style.width = `${Math.round(canvas.width * scale)}px`;
-    canvas.style.height = `${Math.round(canvas.height * scale)}px`;
+    const dpr = window.devicePixelRatio || 1;
+    const boxW = stage.clientWidth * dpr;
+    const boxH = stage.clientHeight * dpr;
+    // pixels físicos por pixel remoto
+    let scale = 1;
+    if (zoom === 'fit') {
+      scale = Math.min(boxW / canvas.width, boxH / canvas.height);
+      // sobrando até 10%, prefere 1:1 exato com uma bordinha a ampliar um
+      // pouco e borrar tudo
+      if (scale >= 1 && scale < 1.1) scale = 1;
+    }
+    const w = Math.round(canvas.width * scale);
+    const h = Math.round(canvas.height * scale);
+    canvas.style.width = `${w / dpr}px`;
+    canvas.style.height = `${h / dpr}px`;
+    canvas.style.marginLeft = `${Math.max(0, Math.floor((boxW - w) / 2)) / dpr}px`;
+    canvas.style.marginTop = `${Math.max(0, Math.floor((boxH - h) / 2)) / dpr}px`;
+  }
+
+  function toggleZoom() {
+    zoom = zoom === 'fit' ? 'real' : 'fit';
+    localStorage.setItem(ZOOM_KEY, zoom);
+    fitCanvas();
+    canvas.focus();
+  }
+
+  // a densidade de pixels muda ao arrastar a janela para outro monitor ou ao
+  // dar zoom no navegador; o ResizeObserver nem sempre percebe a primeira
+  function watchDpr(): () => void {
+    let mq: MediaQueryList;
+    const onChange = () => {
+      mq.removeEventListener('change', onChange);
+      fitCanvas();
+      listen();
+    };
+    const listen = () => {
+      mq = matchMedia(`(resolution: ${window.devicePixelRatio}dppx)`);
+      mq.addEventListener('change', onChange);
+    };
+    listen();
+    return () => mq.removeEventListener('change', onChange);
   }
 
   $effect(() => {
@@ -63,8 +114,10 @@
     // re-ajusta ao mudar o tamanho do palco (janela, tela cheia)
     const ro = new ResizeObserver(fitCanvas);
     ro.observe(stage);
+    const unwatchDpr = watchDpr();
     return () => {
       ro.disconnect();
+      unwatchDpr();
       detach();
       session.close();
       if (document.fullscreenElement) document.exitFullscreen();
@@ -87,7 +140,7 @@
   // Confirma antes: ao contrário do Ctrl+Shift+Esc, não dá para desfazer
   // daqui, e quem está na máquina precisa logar de novo para continuar.
   function lockStation() {
-    if (!confirm(`Bloquear a tela de ${agent.host}? Quem estiver usando o PC vai precisar entrar de novo.`)) return;
+    if (!confirm(`Bloquear a tela de ${agent.name}? Quem estiver usando o PC vai precisar entrar de novo.`)) return;
     sendLock((m) => session.send(m));
     canvas.focus();
   }
@@ -119,7 +172,7 @@
 
     <div class="machine">
       <span class="host">
-        {agent.host}{#if agent.user}<span class="user"> / {agent.user}</span>{/if}
+        {agent.name}{#if agent.user}<span class="user"> / {agent.user}</span>{/if}
       </span>
       <span class={['status', level]} data-testid="viewer-status">{status}</span>
     </div>
@@ -128,6 +181,16 @@
     <select class="wide" bind:value={preset} onchange={changePreset} title="Qualidade" aria-label="Qualidade">
       {#each PRESETS as p (p.value)}<option value={p.value}>{p.label}</option>{/each}
     </select>
+    <button
+      class="sq zoom"
+      onclick={toggleZoom}
+      aria-pressed={zoom === 'real'}
+      title={zoom === 'real'
+        ? 'Ajustar a tela remota à janela'
+        : 'Tamanho real: um pixel remoto por pixel do monitor (mais nítido; rola se não couber)'}
+    >
+      <span aria-hidden="true">{zoom === 'real' ? '⤢' : '1:1'}</span><span class="sr-only">Tamanho real</span>
+    </button>
     <button class="sq" onclick={taskManager} title="Envia Ctrl+Shift+Esc (Gerenciador de Tarefas)">
       <span aria-hidden="true">⌨</span><span class="sr-only">Ctrl+Shift+Esc</span>
     </button>
@@ -151,7 +214,7 @@
     </dl>
   </header>
 
-  <div class="stage" bind:this={stage}>
+  <div class={['stage', zoom]} bind:this={stage}>
     <div class="corners" aria-hidden="true"><i></i><i></i><i></i><i></i></div>
     <canvas
       bind:this={canvas}
@@ -321,11 +384,13 @@
     color: var(--bad);
   }
 
+  /* o canvas é posicionado pelas margens calculadas em fitCanvas (em pixels
+   * físicos inteiros), não por flex/centralização, que podem deixá-lo em meio
+   * pixel e borrar a imagem */
   .stage {
     flex: 1;
-    display: flex;
-    justify-content: center;
-    align-items: center;
+    min-height: 0;
+    display: block;
     overflow: hidden;
     background: #000 radial-gradient(circle at center, #0c0c0d, #000 72%);
     position: relative;
@@ -368,6 +433,18 @@
   canvas {
     display: block;
     outline: none;
+  }
+  /* tamanho real: rola quando a tela remota é maior que a janela */
+  .stage.real {
+    overflow: auto;
+  }
+  .zoom {
+    font-size: 11px;
+  }
+  .zoom[aria-pressed='true'] {
+    border-color: var(--acc);
+    color: var(--acc);
+    background: var(--acc-wash);
   }
   .rcur {
     position: fixed;

@@ -11,13 +11,36 @@ export interface User {
   createdAt: string;
 }
 
-export interface AgentInfo {
+/** Máquina que o usuário pode acessar (GET /api/agents), online ou não. */
+export interface Machine {
   id: string;
-  host: string;
-  user: string;
-  since: string;
+  name: string;
+  owner?: string;
+  legacy: boolean; // agente antigo, sem cadastro: só admins veem
+  createdAt: string;
+  lastSeenAt?: string;
+  online: boolean;
+  user?: string; // usuário logado no Windows
+  version?: string; // versão do agente (vazia em agentes antigos)
+  since?: string;
   busy: boolean;
   viewedBy?: string;
+  mine: boolean;
+  canManage: boolean;
+}
+
+export type Edition = 'portatil' | 'servico';
+
+/** Link de instalação (o caminho com o código só vem na criação). */
+export interface InstallLink {
+  id: number;
+  kind: string;
+  edition: Edition;
+  maxUses: number;
+  uses: number;
+  createdAt: string;
+  expiresAt: string;
+  path?: string;
 }
 
 export interface AuditEntry {
@@ -74,7 +97,13 @@ export const api = {
   me: () => request<User>('GET', '/api/me'),
   login: (username: string, password: string) => request<User>('POST', '/api/login', { username, password }),
   logout: () => request<void>('POST', '/api/logout'),
-  agents: () => request<AgentInfo[]>('GET', '/api/agents'),
+  machines: () => request<Machine[]>('GET', '/api/agents'),
+  removeMachine: (id: string) => request<void>('DELETE', `/api/machines/${id}`),
+  links: () => request<InstallLink[]>('GET', '/api/links'),
+  /** hours 0 = sem prazo; uses 0 = sem limite de máquinas. */
+  createLink: (edition: Edition, hours: number, uses: number) =>
+    request<InstallLink>('POST', '/api/links', { edition, hours, uses }),
+  revokeLink: (id: number) => request<void>('DELETE', `/api/links/${id}`),
   users: () => request<User[]>('GET', '/api/users'),
   createUser: (username: string, password: string, role: Role) =>
     request<User>('POST', '/api/users', { username, password, role }),
