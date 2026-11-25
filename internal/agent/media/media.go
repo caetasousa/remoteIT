@@ -8,6 +8,7 @@ package media
 
 import (
 	"errors"
+	"image"
 	"time"
 )
 
@@ -45,6 +46,13 @@ type CursorReporter interface {
 	CursorPos() (x, y int, visible bool)
 }
 
+// Still captura a tela inteira sem compressão, para o refresh de nitidez
+// (veja [Stream]). [capture.Capturer] já satisfaz esta interface.
+type Still interface {
+	Capture() (*image.RGBA, error)
+	Close()
+}
+
 // Encoders são as fábricas de [Source] disponíveis no build.
 type Encoders struct {
 	// H264 pode devolver erro (sem GPU, sem Media Foundation, build sem CGO);
@@ -59,6 +67,12 @@ type Encoders struct {
 	// (re)abertura da captura; nil ou erro não impedem a tentativa de abrir,
 	// só deixam de garantir que a thread está no desktop certo.
 	FollowDesktop func() error
+	// Still abre um capturador de tela sem compressão. Opcional: com ele, o
+	// pipeline manda uma imagem PNG sem perda quando a tela fica parada,
+	// corrigindo o que o vídeo perde (cor em meia resolução do H.264 4:2:0,
+	// artefatos de compressão). Chamado na thread de captura, então segue o
+	// mesmo desktop que o vídeo.
+	Still func() (Still, error)
 }
 
 // Sender envia mensagens ao técnico. Implementações devem ser seguras para
@@ -88,15 +102,25 @@ var Presets = map[string]Preset{
 // DefaultPreset é o preset usado até o técnico escolher outro.
 const DefaultPreset = "quality"
 
+// CongestedThreshold é quantas esperas por ACK (de ~3 ms cada) num segundo
+// contam como congestionamento de verdade: ~30 ms parados. Abaixo disso é um
+// soluço isolado da rede (comum através de túnel), que não justifica derrubar
+// a qualidade.
+const CongestedThreshold = 10
+
 // NextBitrate calcula o alvo de bitrate do próximo segundo: reduz rápido
-// quando houve congestionamento (-25%) e sobe devagar quando a rede está
-// livre (+10% + 50 kbps), sempre dentro dos limites do preset.
+// quando houve congestionamento real (-25%) e volta logo quando a rede está
+// livre (+20% + 50 kbps); num soluço isolado, mantém. Sempre dentro dos
+// limites do preset. Subir 20% por segundo recupera uma queda de 25% em ~2 s;
+// com 10% a imagem ficava vários segundos borrada depois de um soluço.
 func NextBitrate(kbps int, p Preset, congested, frames int) int {
 	switch {
-	case congested > 0:
+	case congested >= CongestedThreshold:
 		return max(p.MinKbps, kbps*3/4)
+	case congested > 0:
+		return kbps // soluço: segura onde está, sem cortar nem subir
 	case frames > 0:
-		return min(p.MaxKbps, kbps*11/10+50)
+		return min(p.MaxKbps, kbps*6/5+50)
 	}
 	return kbps
 }

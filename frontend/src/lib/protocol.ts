@@ -3,6 +3,8 @@
 export const HEADER_SIZE = 12;
 export const CODEC_H264 = 1;
 export const CODEC_JPEG = 2;
+/** Imagem PNG sem perda enviada quando a tela fica parada (refresh de nitidez). */
+export const CODEC_PNG = 3;
 
 /** Cabeçalho de 12 bytes (big-endian) de todo quadro binário de vídeo. */
 export interface FrameHeader {

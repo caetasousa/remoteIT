@@ -45,15 +45,20 @@ A barra do topo tem **48 px** e todos os controles a mesma caixa de **32 px** de
 ficar desalinhado:
 
 ```
-┌──────────┬──────────────────────┬────┬────┬────────────┬──────────────────────────────────────┐
-│ ← Voltar │ Qualidade ▾          │ ⌨  │ 🔒 │ Tela cheia │ Codec  Resolução  FPS  Banda  RTT    │
-└──────────┴──────────────────────┴────┴────┴────────────┴──────────────────────────────────────┘
-   texto      select (aria-label)   Ctrl+  Bloquear  primário   chips de telemetria, à direita
-   visível                          Shift+Esc (confirm)
+┌──────────┬──────────────────────┬─────┬────┬────┬────────────┬─────────────────────────────────┐
+│ ← Voltar │ Qualidade ▾          │ 1:1 │ ⌨  │ 🔒 │ Tela cheia │ Codec  Resolução  FPS  Banda RTT│
+└──────────┴──────────────────────┴─────┴────┴────┴────────────┴─────────────────────────────────┘
+   texto      select (aria-label)  Tamanho Ctrl+  Bloquear  primário   chips de telemetria
+   visível                         real    Shift+Esc (confirm)
 ```
 
 - `← Voltar` mantém o texto visível: o E2E procura o botão por esse nome acessível.
 - Os botões quadrados têm o nome em `.sr-only` para leitores de tela.
+- `1:1` alterna entre **ajustar à janela** e **tamanho real** (um pixel remoto por pixel do monitor,
+  com rolagem). Ligado, usa `aria-pressed="true"`, a cor de acento e troca o rótulo para `⤢`
+  (voltar a ajustar). O E2E o procura pelo nome acessível "Tamanho real".
+- O canvas não é centralizado por flex: `fitCanvas` calcula tamanho e margens em pixels físicos
+  inteiros, porque meio pixel de deslocamento já borra o texto.
 - `data-testid="viewer-status"` e `data-testid="screen"` são usados pelos testes e não podem sumir.
 
 ## ⬇️ Downloads do agente

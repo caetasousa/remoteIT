@@ -12,9 +12,10 @@ func TestNextBitrate(t *testing.T) {
 		kbps, congested, frames int
 		want                    int
 	}{
-		{"congestionado reduz 25%", 4000, 3, 60, 3000},
-		{"congestionado respeita o mínimo", 1100, 1, 0, 1000},
-		{"livre sobe 10% + 50", 2000, 0, 60, 2250},
+		{"congestionado reduz 25%", 4000, CongestedThreshold, 60, 3000},
+		{"congestionado respeita o mínimo", 1100, CongestedThreshold + 5, 0, 1000},
+		{"soluço isolado mantém", 2000, CongestedThreshold - 1, 60, 2000},
+		{"livre sobe 20% + 50", 2000, 0, 60, 2450},
 		{"livre respeita o máximo", 4900, 0, 60, 5000},
 		{"sem quadros mantém", 2000, 0, 0, 2000},
 	}

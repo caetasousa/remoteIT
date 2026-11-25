@@ -133,11 +133,13 @@ func (s *Stream) capture(ctx context.Context) bool {
 		rttReset  = time.Now()
 		lastShape string
 		buf       []byte
+		still     = newRefresher(s.enc.Still, s.logger)
 	)
 	defer func() {
 		if src != nil {
 			src.Close()
 		}
+		still.close()
 	}()
 
 	open := func() error {
@@ -225,6 +227,22 @@ func (s *Stream) capture(ctx context.Context) bool {
 				return false
 			}
 		} else {
+			// refresh de nitidez pronto: só vale se a tela não mudou desde a
+			// captura e se tem o tamanho do vídeo (presets reduzidos mandam
+			// menos pixels que a tela; o refresh nativo trocaria o tamanho do
+			// canvas). O teto de 2 s de banda do alvo atual evita que um
+			// papel de parede fotográfico em 4K entupa a conexão.
+			if shot, ok := still.take(); ok && shot.w == lastW && shot.h == lastH && len(shot.data) <= kbps*250 {
+				seq := s.flow.Sent(time.Now())
+				buf = protocol.AppendFrame(buf[:0], protocol.FrameHeader{
+					Codec: protocol.CodecPNG, W: uint16(shot.w), H: uint16(shot.h), Seq: seq,
+				}, shot.data)
+				if s.send.SendBinary(buf) != nil {
+					return false
+				}
+				bytes += len(buf)
+				continue
+			}
 			flags, repeat := 0, false
 			timeout := interval // espera no máximo 1 quadro; evita lag acumulado
 			if s.wantKey.Swap(false) {
@@ -246,10 +264,11 @@ func (s *Stream) capture(ctx context.Context) bool {
 				continue
 			}
 			if f != nil {
+				now := time.Now()
 				if !repeat {
 					refine = 2
+					still.changed(now)
 				}
-				now := time.Now()
 				seq := s.flow.Sent(now)
 				buf = protocol.AppendFrame(buf[:0], protocol.FrameHeader{
 					Codec: f.Codec, Keyframe: f.Keyframe, W: uint16(f.W), H: uint16(f.H), Seq: seq,
@@ -268,6 +287,8 @@ func (s *Stream) capture(ctx context.Context) bool {
 					next = now
 				}
 				next = next.Add(interval)
+			} else if refine == 0 && p.MaxW == 0 && still.due(time.Now()) {
+				still.shoot() // tela parada e já refinada pelo encoder
 			}
 		}
 

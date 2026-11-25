@@ -12,6 +12,10 @@ const HeaderSize = 12
 const (
 	CodecH264 byte = 1 // NAL units H.264 Annex-B, decodificadas com WebCodecs
 	CodecJPEG byte = 2 // uma imagem JPEG completa; todo quadro é keyframe
+	// CodecPNG é uma imagem PNG completa, sem perda, enviada uma vez quando a
+	// tela fica parada (o "refresh de nitidez"). Não substitui o vídeo: o
+	// navegador só a desenha por cima do último quadro, no mesmo tamanho.
+	CodecPNG byte = 3
 )
 
 // ErrShortFrame é devolvido por [ParseFrame] quando a mensagem é menor que

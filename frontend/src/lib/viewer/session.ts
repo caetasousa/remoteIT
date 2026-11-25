@@ -5,6 +5,7 @@
 import {
   CODEC_H264,
   CODEC_JPEG,
+  CODEC_PNG,
   parseFrame,
   type ClientMessage,
   type Preset,
@@ -69,6 +70,8 @@ export class ViewerSession {
   private needKey = true;
   private lastKf = 0;
   private rendered = 0;
+  /** Conta os quadros de vídeo recebidos; o refresh PNG só vale se nenhum chegou depois dele. */
+  private videoGen = 0;
   private readonly ctx: CanvasRenderingContext2D;
 
   constructor(
@@ -162,8 +165,34 @@ export class ViewerSession {
     this.rendered++;
   }
 
+  /**
+   * Refresh de nitidez: imagem PNG sem perda que o agente manda quando a tela
+   * para (veja internal/agent/media/still.go). Corrige a cor em meia
+   * resolução do H.264 (texto colorido borrado). Desenha por cima do último
+   * quadro, sem trocar o tamanho do canvas e sem contar como FPS — e só se
+   * nenhum quadro de vídeo chegou enquanto a imagem era decodificada, senão
+   * cobriria a tela nova com uma velha.
+   */
+  private onStill(data: Uint8Array<ArrayBuffer>) {
+    const gen = this.videoGen;
+    createImageBitmap(new Blob([data], { type: 'image/png' }))
+      .then((b) => {
+        if (gen === this.videoGen && b.width === this.canvas.width && b.height === this.canvas.height) {
+          this.ctx.drawImage(b, 0, 0);
+        }
+        b.close();
+      })
+      .catch(() => {});
+  }
+
   private onFrame(buf: ArrayBuffer) {
     const { header, data } = parseFrame(buf);
+    if (header.codec === CODEC_PNG) {
+      this.send({ t: 'ack', s: header.seq });
+      this.onStill(data);
+      return;
+    }
+    this.videoGen++;
     if (header.codec === CODEC_JPEG) {
       this.send({ t: 'ack', s: header.seq });
       createImageBitmap(new Blob([data], { type: 'image/jpeg' }))
