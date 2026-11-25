@@ -5,7 +5,7 @@
 | | 🌐 Console no navegador | 🖥️ Visualizador do técnico |
 |---|---|---|
 | Onde | qualquer computador, qualquer sistema | Windows |
-| Instalar | nada | um `.exe`, sem admin |
+| Instalar | nada | um `.exe` (baixado em `.zip`), sem admin |
 | Decodificação | `VideoDecoder` do navegador | Media Foundation na GPU (DXVA) ou CPU |
 | Cor com a tela em movimento | 4:2:0 (meia resolução; nítida só quando a tela para) | **4:4:4** (completa), na resolução nativa |
 | AV1 (menos banda) | se o navegador decodifica AV1 na GPU | se o Windows tem a *Extensão de Vídeo AV1* |
@@ -18,8 +18,8 @@
 
 ## ⬇️ Instalar
 
-1. No console, em **Máquinas**, clique em **Visualizador do técnico (Windows)**.
-2. Guarde o `remoteit-tecnico.exe` onde quiser (ex.: Área de Trabalho) e dê dois cliques. Se o SmartScreen aparecer: *Mais informações* → *Executar assim mesmo*.
+1. No console, em **Máquinas**, clique em **Visualizador do técnico (.zip)**.
+2. Extraia o `remoteit-tecnico.exe` do `.zip` onde quiser (ex.: Área de Trabalho) e dê dois cliques. Se o SmartScreen aparecer: *Mais informações* → *Executar assim mesmo*.
 3. Entre com o mesmo usuário e senha do console. O endereço do relay já vem preenchido.
 
 O login fica guardado (protegido pelo Windows, só para o seu usuário) em `%LOCALAPPDATA%\RemoteIT\viewer.token`. **Sair** apaga.

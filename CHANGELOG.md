@@ -71,6 +71,10 @@ O formato segue o [Keep a Changelog](https://keepachangelog.com/pt-BR/1.1.0/) e 
 
 ### Changed
 
+- Downloads pelo navegador vêm em **`.zip`** (o `.exe` e um `LEIA-ME.txt`): os botões do console
+  (`/download/agent.zip`, `agent-servico.zip`, `viewer.zip`) e o link de instalação `/i/<código>`.
+  O `.exe` solto continua em `/download/*.exe` e `/i/<código>/exe` (curl, atualização automática e o
+  comando do PowerShell).
 - O console não usa mais `confirm()` do navegador: remover máquina ou usuário, aprovar conta, revogar
   link e bloquear a tela remota pedem confirmação num modal no tema do console (Esc cancela; nas
   ações destrutivas o foco começa em "Cancelar").

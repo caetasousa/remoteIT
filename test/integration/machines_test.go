@@ -3,6 +3,7 @@
 package integration
 
 import (
+	"archive/zip"
 	"bytes"
 	"context"
 	"crypto/sha256"
@@ -245,15 +246,30 @@ func TestInstallLink(t *testing.T) {
 		t.Errorf("link de 30 dias deveria ser recusado: status %d", s)
 	}
 
+	// no navegador, o link entrega um .zip com o .exe marcado e o LEIA-ME
 	resp, err := http.Get(e.srv.URL + link.Path) // sem login
 	if err != nil {
 		t.Fatal(err)
 	}
-	exe, _ := io.ReadAll(resp.Body)
+	zipped, _ := io.ReadAll(resp.Body)
 	resp.Body.Close()
-	if resp.StatusCode != 200 || !strings.Contains(resp.Header.Get("Content-Disposition"), "suporte-ti-servico.exe") ||
-		!strings.HasPrefix(string(exe), "servico") {
-		t.Fatalf("link: status %d, disposition %q", resp.StatusCode, resp.Header.Get("Content-Disposition"))
+	if resp.StatusCode != 200 || resp.Header.Get("Content-Type") != "application/zip" ||
+		!strings.Contains(resp.Header.Get("Content-Disposition"), "suporte-ti-servico.zip") {
+		t.Fatalf("link: status %d, headers %v", resp.StatusCode, resp.Header)
+	}
+	exe := unzipFile(t, zipped, "suporte-ti-servico.exe")
+	if !strings.HasPrefix(string(exe), "servico") || unzipFile(t, zipped, "LEIA-ME.txt") == nil {
+		t.Fatal("o zip do link não tem o .exe da edição e o LEIA-ME")
+	}
+	// o .exe cru, para o script do PowerShell: o mesmo arquivo do zip
+	resp, err = http.Get(e.srv.URL + link.Path + "/exe")
+	if err != nil {
+		t.Fatal(err)
+	}
+	raw, _ := io.ReadAll(resp.Body)
+	resp.Body.Close()
+	if resp.StatusCode != 200 || !bytes.Equal(raw, exe) {
+		t.Fatalf("/exe: status %d, igual ao do zip: %v", resp.StatusCode, bytes.Equal(raw, exe))
 	}
 	code := stampedCode(t, exe)
 	if "/i/"+code != link.Path {
@@ -270,7 +286,7 @@ func TestInstallLink(t *testing.T) {
 	resp.Body.Close()
 	sum := sha256.Sum256(exe)
 	for _, want := range []string{
-		"$url = '" + e.srv.URL + link.Path + "'",
+		"$url = '" + e.srv.URL + link.Path + "/exe'",
 		"$sha = '" + hex.EncodeToString(sum[:]) + "'",
 		"suporte-ti-servico.exe", "-Verb RunAs",
 	} {
@@ -386,4 +402,22 @@ func TestOrphanAccessesClosedOnStart(t *testing.T) {
 	if len(entries) != 1 || entries[0].EndedAt == nil {
 		t.Errorf("acesso continua aberto: %+v", entries)
 	}
+}
+
+// unzipFile devolve o conteúdo de name dentro do zip (nil se não houver).
+func unzipFile(t *testing.T, z []byte, name string) []byte {
+	t.Helper()
+	r, err := zip.NewReader(bytes.NewReader(z), int64(len(z)))
+	if err != nil {
+		t.Fatalf("zip inválido: %v", err)
+	}
+	for _, f := range r.File {
+		if f.Name == name {
+			rc, _ := f.Open()
+			defer rc.Close()
+			b, _ := io.ReadAll(rc)
+			return b
+		}
+	}
+	return nil
 }

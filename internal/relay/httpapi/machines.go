@@ -161,33 +161,27 @@ func (s *server) stamped(edition, code string) (exe []byte, name string, status 
 	return out, name, 0, nil
 }
 
-// serveStamped envia o .exe da edição com code gravado no espaço reservado.
-func (s *server) serveStamped(w http.ResponseWriter, edition, code string) {
+// serveStamped envia o .exe da edição com code gravado no espaço reservado;
+// asZip o embrulha num .zip (veja zip.go).
+func (s *server) serveStamped(w http.ResponseWriter, edition, code string, asZip bool) {
 	out, name, status, err := s.stamped(edition, code)
 	if err != nil {
 		writeError(w, status, err.Error())
 		return
 	}
-	w.Header().Set("Content-Type", "application/vnd.microsoft.portable-executable")
-	w.Header().Set("Content-Disposition", `attachment; filename="`+name+`"`)
-	// Sem isso o Cloudflare (que guarda .exe por padrão) e o navegador
-	// entregariam uma cópia antiga; private impede que um cache
-	// compartilhado guarde um arquivo que cadastra máquinas no nome de alguém.
-	w.Header().Set("Cache-Control", "no-store, private")
-	w.Header().Set("Content-Length", strconv.Itoa(len(out)))
-	w.Write(out)
+	s.writeDownload(w, name, out, asZip)
 }
 
 // download serve o .exe da edição marcado com um código novo do técnico
 // logado: as máquinas em que ele rodar ficam no nome desse técnico.
-func (s *server) download(edition string) http.Handler {
+func (s *server) download(edition string, asZip bool) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		code, _, err := s.Machines.NewDownloadCode(r.Context(), actorOf(userFrom(r.Context())), edition)
 		if err != nil {
 			s.machineError(w, "código de download", err)
 			return
 		}
-		s.serveStamped(w, edition, code)
+		s.serveStamped(w, edition, code, asZip)
 	})
 }
 
@@ -213,10 +207,13 @@ func (s *server) linkCode(w http.ResponseWriter, r *http.Request) (string, machi
 }
 
 // installLink é público: quem tem o link baixa o .exe já marcado com o
-// código do link, sem precisar de conta.
-func (s *server) installLink(w http.ResponseWriter, r *http.Request) {
-	if code, c, ok := s.linkCode(w, r); ok {
-		s.serveStamped(w, c.Edition, code)
+// código do link, sem precisar de conta. No navegador vem num .zip; o .exe
+// cru fica em /i/{code}/exe, para o script do PowerShell.
+func (s *server) installLink(asZip bool) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if code, c, ok := s.linkCode(w, r); ok {
+			s.serveStamped(w, c.Edition, code, asZip)
+		}
 	}
 }
 
@@ -236,7 +233,7 @@ func (s *server) installScript(w http.ResponseWriter, r *http.Request) {
 	}
 	sum := sha256.Sum256(exe)
 	script, err := installPS(installPSData{
-		ExeURL:  s.publicBase(r) + "/i/" + code,
+		ExeURL:  s.publicBase(r) + "/i/" + code + "/exe",
 		SHA256:  hex.EncodeToString(sum[:]),
 		Name:    name,
 		Service: c.Edition == machines.EditionService,

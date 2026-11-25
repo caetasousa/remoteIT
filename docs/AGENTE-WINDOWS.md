@@ -23,8 +23,8 @@
 
 ## ▶️ Usar o portátil
 
-1. No console, clique em **Executar agente (.exe)** e salve.
-2. Se o navegador segurar o download ("não é baixado com frequência"), clique em **Manter** (no Edge: `...` → *Manter* → *Mostrar mais* → *Manter mesmo assim*).
+1. No console, clique em **Executar agente (.zip)** e salve. O download vem em `.zip` (com o `.exe` e um `LEIA-ME.txt`), que o navegador segura bem menos que um `.exe` solto; se ainda assim segurar, clique em **Manter**.
+2. Extraia o `.zip` (botão direito → *Extrair tudo*).
 3. Dê **dois cliques** no `suporte-ti.exe`. Se aparecer o SmartScreen ("O Windows protegeu o computador"): *Mais informações* → *Executar assim mesmo*.
 4. Em alguns segundos a máquina aparece em **Máquinas online** no console.
 
@@ -36,8 +36,8 @@
 
 ## 🧩 Instalar o serviço
 
-1. No console, clique em **Instalar como serviço (.exe)** e salve (clique em **Manter** se o navegador segurar).
-2. Dê **dois cliques** no `suporte-ti-servico.exe`.
+1. No console, clique em **Instalar como serviço (.zip)** e salve (clique em **Manter** se o navegador segurar).
+2. Extraia o `.zip` e dê **dois cliques** no `suporte-ti-servico.exe`.
 3. O Windows pergunta *"Deseja permitir que este aplicativo faça alterações?"* → **Sim**.
 4. Pronto. A máquina aparece no console e continua lá depois de reiniciar o PC.
 
@@ -184,7 +184,7 @@ time=... level=INFO msg="conectado ao relay" id=pc1
 | Aparece "sem versão" no console | agente instalado antes da atualização automática | reinstale uma vez com um `.exe` baixado agora; depois ele se atualiza sozinho |
 | A máquina sumiu e não volta | alguém a **removeu** no console: a credencial foi revogada | instale um agente baixado de novo (ele se cadastra como máquina nova) |
 | "conectado/desconectado" depois de clonar o PC | a imagem clonada levou o `machine.json` junto | apague `machine.json` no clone e reinicie o serviço: ele se cadastra de novo (se o código do `.exe` ainda valer) |
-| O navegador salvou `suporte-ti (1).exe` | já havia um arquivo com o mesmo nome | tudo bem: o nome não importa, a edição está dentro do `.exe` |
+| O navegador salvou `suporte-ti (1).zip` (ou `.exe`) | já havia um arquivo com o mesmo nome | tudo bem: o nome não importa, a edição está dentro do `.exe` |
 | `install` "não fez nada" | o UAC foi negado, ou o PowerShell não esperou | rode com `Start-Process ... -Wait` e leia o `service.log` |
 | O PC exige Ctrl+Alt+Del antes do login | política de grupo (*Logon interativo: não exigir Ctrl+Alt+Del* desativada) | o Windows não deixa simular essa combinação; desative a política ou faça o login local |
 | Antivírus apagou o arquivo | `.exe` sem assinatura com comportamento de acesso remoto | veja abaixo |

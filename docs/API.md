@@ -34,9 +34,11 @@
 | `GET /api/agent/update?mid=&edition=` | credencial da máquina | | 200 `{version, sha256, signature, size}` do `update.json` · 204 sem atualização publicada · 401/403 |
 | `GET /api/agent/update/{edition}?mid=` | credencial da máquina | | o `.exe` da edição, **sem** código gravado ([ADR 0011](adr/0011-atualizacao-automatica.md)) |
 | `GET /download/viewer.exe` | logado | | o visualizador nativo do técnico (`remoteit-tecnico.exe`) |
+| `GET /download/viewer.zip` | logado | | o mesmo, num `.zip` com `LEIA-ME.txt` (o botão do console usa este) |
 | `GET /api/viewer/update` | logado | | oferta assinada da edição `tecnico` · 204 sem atualização |
 | `GET /api/viewer/update.exe` | logado | | o visualizador, para a atualização automática |
-| `GET /i/{código}` | **público** | | o `.exe` da edição do link, marcado com o código · 404 inválido/vencido/esgotado · 429 (200/dia por IP) |
+| `GET /i/{código}` | **público** | | `.zip` com o `.exe` da edição do link, marcado com o código, e um `LEIA-ME.txt` · 404 inválido/vencido/esgotado · 429 (200/dia por IP) |
+| `GET /i/{código}/exe` | **público** | | o `.exe` cru do link (o que o script do PowerShell baixa e confere) · mesmos 404/429 |
 | `GET /i/{código}/ps` | **público** | | script PowerShell para `irm <link>/ps \| iex`: baixa o `.exe` do mesmo link, confere o SHA-256 e instala (serviço com UAC, ou portátil em `%LOCALAPPDATA%\RemoteIT`). `text/plain; charset=utf-8`, `no-store` · mesmos 404/429 do link |
 | `POST /api/agent/enroll` | **público** + código | `{code, name}` | 201 `{id, secret}` · 403 código inválido · 400 · 429 (120/h por IP) |
 | `GET /api/users` | admin | | 200 `User[]` · 403 |
@@ -49,6 +51,7 @@
 | `GET /ws/agent?id=&host=&user=&key=` | chave (legado) | | WebSocket · 403 (ou com `RELAY_LEGACY_AGENTS=false`) |
 | `GET /download/agent.exe` | logado | | `suporte-ti.exe` **marcado com um código novo do usuário** (30 dias, até 50 máquinas); `Cache-Control: no-store, private` · 503 se o `.exe` do servidor não tem o espaço do código |
 | `GET /download/agent-servico.exe` | logado | | o mesmo, edição de serviço (`-agent-service-exe`, padrão: ao lado do `-agent-exe`) |
+| `GET /download/agent.zip`, `/download/agent-servico.zip` | logado | | os mesmos `.exe` marcados, num `.zip` com `LEIA-ME.txt` (os botões do console usam estes) |
 | `GET /healthz` | público | | 200 `ok` · 503 banco fora |
 
 ## 🧾 Tipos

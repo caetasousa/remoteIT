@@ -200,7 +200,7 @@ func TestViewerDownloadAndUpdate(t *testing.T) {
 		c.ViewerExe = filepath.Join(dir, "remoteit-tecnico.exe")
 	})
 
-	for _, p := range []string{"/download/viewer.exe", "/api/viewer/update", "/api/viewer/update.exe"} {
+	for _, p := range []string{"/download/viewer.exe", "/download/viewer.zip", "/api/viewer/update", "/api/viewer/update.exe"} {
 		if r, _ := http.Get(e.srv.URL + p); r.StatusCode != http.StatusUnauthorized {
 			t.Errorf("%s sem login: status %d", p, r.StatusCode)
 		}
@@ -217,5 +217,17 @@ func TestViewerDownloadAndUpdate(t *testing.T) {
 	exe, err := api.DownloadUpdate(t.Context())
 	if err != nil || string(exe) != "visualizador-v2" {
 		t.Errorf("download = %q, %v", exe, err)
+	}
+	// o botão do console baixa o visualizador num .zip
+	tech := e.newTech("caio")
+	resp, err := tech.http.Get(e.srv.URL + "/download/viewer.zip")
+	if err != nil {
+		t.Fatal(err)
+	}
+	z, _ := io.ReadAll(resp.Body)
+	resp.Body.Close()
+	if got := unzipFile(t, z, "remoteit-tecnico.exe"); string(got) != "visualizador-v2" ||
+		!strings.Contains(resp.Header.Get("Content-Disposition"), "remoteit-tecnico.zip") {
+		t.Errorf("viewer.zip: %q, headers %v", got, resp.Header)
 	}
 }

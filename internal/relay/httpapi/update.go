@@ -85,7 +85,23 @@ func (s *server) viewerOffer(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, protocol.UpdateOffer{Version: m.Version, UpdateFile: f})
 }
 
-// viewerExe serve o visualizador nativo (download pelo console e atualização).
+// viewerDownload serve o visualizador pelo console: .zip (navegador) ou .exe.
+func (s *server) viewerDownload(asZip bool) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if !asZip {
+			s.viewerExe(w, r)
+			return
+		}
+		exe, err := os.ReadFile(s.ViewerExe)
+		if s.ViewerExe == "" || err != nil {
+			http.NotFound(w, r)
+			return
+		}
+		s.writeDownload(w, "remoteit-tecnico.exe", exe, true)
+	}
+}
+
+// viewerExe serve o visualizador nativo (download .exe e atualização).
 func (s *server) viewerExe(w http.ResponseWriter, r *http.Request) {
 	if s.ViewerExe == "" {
 		http.NotFound(w, r)

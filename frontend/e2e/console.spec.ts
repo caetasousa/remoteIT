@@ -114,6 +114,14 @@ test('técnico não vê máquinas que não são dele e o acesso do admin fica na
 
 test('link de instalação baixa o agente sem login', async ({ page, request }) => {
   await login(page, ADMIN.user, ADMIN.pass);
+  // os downloads pelo navegador vão em .zip (o .exe solto o navegador segura)
+  for (const [name, path] of [
+    ['Executar agente (.zip)', '/download/agent.zip'],
+    ['Instalar como serviço (.zip)', '/download/agent-servico.zip'],
+    ['Visualizador do técnico (.zip)', '/download/viewer.zip'],
+  ]) {
+    await expect(page.getByRole('link', { name })).toHaveAttribute('href', new RegExp(`^${path}\\?t=\\d+$`));
+  }
   await page.getByLabel('Edição').selectOption('servico');
   await page.getByLabel('Validade').selectOption('0'); // sem prazo
   await page.getByLabel('Máquinas').selectOption('0'); // sem limite

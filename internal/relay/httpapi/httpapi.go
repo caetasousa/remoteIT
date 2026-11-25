@@ -33,11 +33,12 @@
 //	GET    /ws/viewer?id=       WebSocket do técnico
 //	GET    /ws/agent?mid=       WebSocket do agente (credencial da máquina no Authorization)
 //	GET    /ws/agent?key=&id=   WebSocket de agente legado (chave compartilhada)
-//	GET    /download/agent.exe          agente portátil, marcado com um código do técnico
-//	GET    /download/agent-servico.exe  agente que instala o serviço, marcado
-//	GET    /i/{code}            público: .exe de um link de instalação
+//	GET    /download/agent.{exe,zip}          agente portátil, marcado com um código do técnico
+//	GET    /download/agent-servico.{exe,zip}  agente que instala o serviço, marcado
+//	GET    /i/{code}            público: .zip (.exe + LEIA-ME) de um link de instalação
+//	GET    /i/{code}/exe        público: o .exe cru do link (o script do PowerShell baixa este)
 //	GET    /i/{code}/ps         público: o mesmo link como script PowerShell (irm … | iex)
-//	GET    /download/viewer.exe visualizador nativo do técnico (Windows)
+//	GET    /download/viewer.{exe,zip} visualizador nativo do técnico (Windows)
 //	GET    /api/viewer/update   versão disponível do visualizador (assinada)
 //	GET    /api/viewer/update.exe  o visualizador, para a atualização
 //	GET    /healthz             público: relay e banco respondendo
@@ -149,7 +150,8 @@ func New(cfg Config) http.Handler {
 	mux.HandleFunc("GET /api/agent/update/{edition}", s.updateDownload)
 	mux.Handle("GET /api/viewer/update", s.auth(http.HandlerFunc(s.viewerOffer)))
 	mux.Handle("GET /api/viewer/update.exe", s.auth(http.HandlerFunc(s.viewerExe)))
-	mux.Handle("GET /download/viewer.exe", s.auth(http.HandlerFunc(s.viewerExe)))
+	mux.Handle("GET /download/viewer.exe", s.auth(s.viewerDownload(false)))
+	mux.Handle("GET /download/viewer.zip", s.auth(s.viewerDownload(true)))
 	mux.Handle("GET /api/users", s.admin(http.HandlerFunc(s.listUsers)))
 	mux.Handle("POST /api/users", s.admin(http.HandlerFunc(s.createUser)))
 	mux.Handle("DELETE /api/users/{id}", s.admin(http.HandlerFunc(s.deleteUser)))
@@ -157,12 +159,15 @@ func New(cfg Config) http.Handler {
 	mux.Handle("GET /ws/viewer", s.auth(http.HandlerFunc(s.viewerWS)))
 	mux.HandleFunc("GET /ws/agent", s.agentWS)
 	if cfg.AgentExe != "" {
-		mux.Handle("GET /download/agent.exe", s.auth(s.download(machines.EditionPortable)))
+		mux.Handle("GET /download/agent.exe", s.auth(s.download(machines.EditionPortable, false)))
+		mux.Handle("GET /download/agent.zip", s.auth(s.download(machines.EditionPortable, true)))
 	}
 	if cfg.AgentServiceExe != "" {
-		mux.Handle("GET /download/agent-servico.exe", s.auth(s.download(machines.EditionService)))
+		mux.Handle("GET /download/agent-servico.exe", s.auth(s.download(machines.EditionService, false)))
+		mux.Handle("GET /download/agent-servico.zip", s.auth(s.download(machines.EditionService, true)))
 	}
-	mux.HandleFunc("GET /i/{code}", s.installLink)
+	mux.HandleFunc("GET /i/{code}", s.installLink(true))
+	mux.HandleFunc("GET /i/{code}/exe", s.installLink(false))
 	mux.HandleFunc("GET /i/{code}/ps", s.installScript)
 	mux.HandleFunc("GET /healthz", s.healthz)
 	mux.Handle("GET /", staticHandler(cfg.Static))

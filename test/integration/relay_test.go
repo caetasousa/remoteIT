@@ -425,6 +425,29 @@ func TestBothAgentEditionsDownload(t *testing.T) {
 			t.Errorf("%s: sem no-store", path)
 		}
 	}
+	// os botões do console baixam o mesmo agente marcado, dentro de um .zip
+	for path, want := range map[string][3]string{
+		"/download/agent.zip":         {"portatil", "suporte-ti.zip", "suporte-ti.exe"},
+		"/download/agent-servico.zip": {"servico", "suporte-ti-servico.zip", "suporte-ti-servico.exe"},
+	} {
+		resp, err := c.http.Get(e.srv.URL + path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		b, _ := io.ReadAll(resp.Body)
+		resp.Body.Close()
+		if resp.Header.Get("Content-Type") != "application/zip" || !strings.Contains(resp.Header.Get("Content-Disposition"), want[1]) {
+			t.Errorf("%s: headers %v", path, resp.Header)
+			continue
+		}
+		exe := unzipFile(t, b, want[2])
+		if !strings.HasPrefix(string(exe), want[0]) || len(stampedCode(t, exe)) == 0 {
+			t.Errorf("%s: .exe do zip = %q", path, exe)
+		}
+	}
+	if s := e.anonymous().do("GET", "/download/agent.zip", nil, nil); s != http.StatusUnauthorized {
+		t.Errorf("zip sem login: status %d, want 401", s)
+	}
 }
 
 // fakeExe é um "executável" com o espaço do código de cadastro, como o

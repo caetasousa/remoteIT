@@ -117,18 +117,19 @@
   ]}
 >
   {#snippet aside()}
-    <!-- ?t= muda a cada carregamento: nenhum cache entrega um agente antigo -->
+    <!-- ?t= muda a cada carregamento: nenhum cache entrega um agente antigo.
+         Vão em .zip (com LEIA-ME): o navegador segura menos que um .exe solto -->
     <div class="downloads">
-      <a class="btn pill download" href={`/download/agent.exe?t=${Date.now()}`}>
-        Executar agente (.exe) <span aria-hidden="true">↓</span>
+      <a class="btn pill download" href={`/download/agent.zip?t=${Date.now()}`}>
+        Executar agente (.zip) <span aria-hidden="true">↓</span>
       </a>
-      <small>Dois cliques e roda. Sem instalar, sem admin.</small>
-      <a class="btn pill download" href={`/download/agent-servico.exe?t=${Date.now()}`}>
-        Instalar como serviço (.exe) <span aria-hidden="true">↓</span>
+      <small>Extraia e dê dois cliques. Sem instalar, sem admin.</small>
+      <a class="btn pill download" href={`/download/agent-servico.zip?t=${Date.now()}`}>
+        Instalar como serviço (.zip) <span aria-hidden="true">↓</span>
       </a>
       <small>Acesso antes do login e na tela de bloqueio. Pede admin.</small>
-      <a class="btn pill download viewer" href={`/download/viewer.exe?t=${Date.now()}`}>
-        Visualizador do técnico (Windows) <span aria-hidden="true">↓</span>
+      <a class="btn pill download viewer" href={`/download/viewer.zip?t=${Date.now()}`}>
+        Visualizador do técnico (.zip) <span aria-hidden="true">↓</span>
       </a>
       <small>Para você: tela mais fluida e todas as teclas (Win, Alt+Tab) sem tela cheia.</small>
     </div>

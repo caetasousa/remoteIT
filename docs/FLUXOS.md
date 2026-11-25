@@ -563,12 +563,13 @@ sequenceDiagram
     participant CF as ☁️ Cloudflare
     participant N as 🧑‍💻 Navegador
     DEV->>SRV: suporte-ti.exe + suporte-ti-servico.exe
-    N->>CF: GET /download/agent-servico.exe?t=<agora>
+    N->>CF: GET /download/agent-servico.zip?t=<agora>
     CF->>SRV: repassa (URL nova a cada carregamento)
     SRV-->>N: Cache-Control: no-store, private
     Note over CF,N: ninguém guarda a resposta
 ```
 
+* 🗜️ **Pelo navegador vem um `.zip`:** os botões do console (`/download/*.zip`) e o link de instalação (`/i/<código>`) entregam um `.zip` com o `.exe` e um `LEIA-ME.txt`. Um `.exe` solto é o que os navegadores mais seguram ("não é baixado com frequência") e renomeiam. As rotas `.exe` continuam para `curl`, para a atualização automática e para o comando do PowerShell (`/i/<código>/exe`). Ao rodar o `.exe` extraído, o SmartScreen do Windows ainda pode avisar: o zip não substitui assinatura de código. Código: [`httpapi/zip.go`](../internal/relay/httpapi/zip.go).
 * 🏷️ **Cada download é único:** o relay grava o código do técnico no `.exe` ([fluxo 13](#maquinas)), então dois arquivos baixados nunca têm o mesmo hash. Para conferir o que está instalado, veja [AGENTE-WINDOWS.md](AGENTE-WINDOWS.md#conferir-versao).
 * 🔐 **Só para quem está logado** (ou com um link de instalação): sem cookie, as rotas de download respondem 401. O `private` impede que um cache compartilhado guarde um arquivo que cadastra máquinas no nome de alguém.
 
@@ -636,8 +637,8 @@ sequenceDiagram
     R-->>T: /i/<código> (mostrado só agora)
     T->>C: manda o link (WhatsApp, e-mail)
     C->>R: GET /i/<código> (sem login)
-    R-->>C: suporte-ti-servico.exe marcado com o código do link
-    C->>C: dois cliques → UAC → serviço instalado → cadastra no nome da Ana
+    R-->>C: suporte-ti-servico.zip (o .exe marcado com o código do link + LEIA-ME)
+    C->>C: extrai, dois cliques → UAC → serviço instalado → cadastra no nome da Ana
     Note over R: link permanente: serve para o próximo cliente também,<br/>até a Ana revogar
 ```
 
@@ -654,8 +655,8 @@ sequenceDiagram
     participant R as 🔀 Relay
     C->>R: irm /i/<código>/ps
     R-->>C: script com a URL do .exe e o SHA-256 dele
-    C->>R: Invoke-WebRequest /i/<código>
-    R-->>C: suporte-ti-servico.exe marcado
+    C->>R: Invoke-WebRequest /i/<código>/exe
+    R-->>C: suporte-ti-servico.exe marcado (cru, sem zip)
     C->>C: confere o SHA-256 (diferente: apaga e para)
     C->>C: Start-Process install -Verb RunAs (UAC) → código de saída
     Note over C: "Pronto" em verde, ou o erro e onde ver o log
