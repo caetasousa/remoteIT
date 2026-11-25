@@ -18,6 +18,9 @@ func validEdition(e string) bool {
 	return e == machines.EditionPortable || e == machines.EditionService
 }
 
+// EditionViewer é o visualizador nativo do técnico no update.json.
+const EditionViewer = "tecnico"
+
 func (s *server) readManifest() (protocol.UpdateManifest, bool) {
 	var m protocol.UpdateManifest
 	if s.UpdateManifest == "" {
@@ -67,4 +70,29 @@ func (s *server) updateDownload(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Cache-Control", "no-store, private")
 	w.Header().Set("Content-Type", "application/vnd.microsoft.portable-executable")
 	http.ServeFile(w, r, path)
+}
+
+// viewerOffer: GET /api/viewer/update (técnico logado) → a versão disponível
+// do visualizador nativo. 204 se não há.
+func (s *server) viewerOffer(w http.ResponseWriter, r *http.Request) {
+	m, ok := s.readManifest()
+	f, has := m.Files[EditionViewer]
+	if !ok || !has {
+		w.WriteHeader(http.StatusNoContent)
+		return
+	}
+	w.Header().Set("Cache-Control", "no-store")
+	writeJSON(w, http.StatusOK, protocol.UpdateOffer{Version: m.Version, UpdateFile: f})
+}
+
+// viewerExe serve o visualizador nativo (download pelo console e atualização).
+func (s *server) viewerExe(w http.ResponseWriter, r *http.Request) {
+	if s.ViewerExe == "" {
+		http.NotFound(w, r)
+		return
+	}
+	w.Header().Set("Cache-Control", "no-store, private")
+	w.Header().Set("Content-Type", "application/vnd.microsoft.portable-executable")
+	w.Header().Set("Content-Disposition", `attachment; filename="remoteit-tecnico.exe"`)
+	http.ServeFile(w, r, s.ViewerExe)
 }

@@ -45,6 +45,15 @@ type env struct {
 	t   *testing.T
 	srv *httptest.Server
 	db  *postgres.DB
+
+	clipMu sync.Mutex
+	clips  []string // textos que os agentes reais puseram na área de transferência
+}
+
+func (e *env) clipboard() []string {
+	e.clipMu.Lock()
+	defer e.clipMu.Unlock()
+	return append([]string(nil), e.clips...)
 }
 
 // newEnv sobe o relay; opts ajustam a configuração antes de criá-lo.
@@ -194,6 +203,7 @@ func (e *env) realAgentWithLock(id string, ask consent.Asker, in *recordingInjec
 			func(send media.Sender) relayclient.Handler {
 				return session.New(session.Config{
 					Host: id, Consent: ask, Input: in, Lock: onLock, Logger: logger,
+					Clipboard: func(text string) { e.clipMu.Lock(); e.clips = append(e.clips, text); e.clipMu.Unlock() },
 					NewStream: func(s media.Sender) session.Stream { return media.NewStream(enc, s, logger) },
 				}, send)
 			}, logger)

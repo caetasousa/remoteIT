@@ -138,6 +138,7 @@ func run(opt server.Options, agentExe, agentSvcExe string, logger *slog.Logger) 
 		AgentExe:        agentExe,
 		AgentServiceExe: agentSvcExe,
 		UpdateManifest:  updateManifest(agentExe),
+		ViewerExe:       sibling(agentExe, "remoteit-tecnico.exe"),
 		Static:          web.FS(),
 		Health:          db.Ping,
 		Logger:          logger,
@@ -145,6 +146,14 @@ func run(opt server.Options, agentExe, agentSvcExe string, logger *slog.Logger) 
 		ClientIPHeader: os.Getenv("RELAY_CLIENT_IP_HEADER"),
 	})
 	return server.Run(ctx, opt, handler, logger)
+}
+
+// sibling é o arquivo name na pasta do agente ("" sem agente configurado).
+func sibling(agentExe, name string) string {
+	if agentExe == "" {
+		return ""
+	}
+	return filepath.Join(filepath.Dir(agentExe), name)
 }
 
 // updateManifest é o update.json que o build.sh grava ao lado dos .exe.

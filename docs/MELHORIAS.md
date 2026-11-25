@@ -16,7 +16,7 @@
 | 4 | 🟨 [📥 Instalar sem passar pelo navegador](#sem-navegador) | 🔴 | 4a feito; resto ⏱️ 2–4 | o navegador foi a origem da maior parte dos problemas de instalação |
 | 5 | 🟨 [🛡️ Endurecer o login e o console](#login) | 🟡 | limite e CSP feitos; resto ⏱️ 2 | limite de tentativas, 2FA, CSP |
 | 6 | [⚙️ CI no GitHub, com Windows](#ci) | 🟡 | ⏱️ 2 | hoje nada do Windows é testado automaticamente |
-| 7 | [🖥️ Visualizador nativo para o técnico](#viewer-nativo) | 🟡 | ⏱️ 10+ | o único caminho para cor 4:4:4 e menor latência |
+| 7 | 🟨 [🖥️ Visualizador nativo para o técnico](#viewer-nativo) | 🟡 | 1ª versão feita; 4:4:4 a fazer | o único caminho para cor 4:4:4 e menor latência |
 | 8 | [🧰 Funcionalidades de suporte](#funcionalidades) | 🟡 | ⏱️ variável | área de transferência, arquivos, vários monitores, Ctrl+Alt+Del |
 | 9 | [📡 Transporte e desempenho](#desempenho) | 🟢 | ⏱️ 5+ | WebTransport/UDP, regiões alteradas |
 | 10 | 🟨 [📜 Auditoria, transparência e LGPD](#lgpd) | 🟡 | órfãs feito; resto ⏱️ 2–3 | aviso de "sendo acessado", retenção, gravação opcional |
@@ -251,7 +251,9 @@ Os testes rodam só na máquina de desenvolvimento, e tudo o que é Windows (ser
 ---
 
 <a id="viewer-nativo"></a>
-## 7️⃣ 🖥️ Visualizador nativo para o técnico (o "substituto do navegador" do lado do técnico)
+## 7️⃣ 🟨 🖥️ Visualizador nativo para o técnico (o "substituto do navegador" do lado do técnico)
+
+> 🟨 **1ª versão feita em 25/11/2026** ([ADR 0012](adr/0012-visualizador-nativo.md), [guia](VISUALIZADOR.md)): Go + Win32, H.264 decodificado pelo Media Foundation (GPU quando possível), todas as teclas sem tela cheia, área de transferência para o PC remoto, atualização automática. Usado **junto** com o console. Falta a cor 4:4:4 (exige mudar o encoder do agente), vários monitores e arquivos.
 
 ### ❗ O problema hoje
 
@@ -355,5 +357,5 @@ Um **aplicativo do técnico** (Windows/macOS/Linux) que fala o mesmo protocolo d
 
 1. ✅ **Feito em 25/11/2026:** as máquinas antigas foram removidas e `RELAY_LEGACY_AGENTS=false` está em produção.
 2. ✅ **Feito em 25/11/2026:** atualização automática (item 3).
-3. **Visualizador nativo para Windows** (item 7), pedido em 25/11/2026, para usar **junto** com o console no navegador.
+3. 🟨 **Visualizador nativo para Windows** (item 7): 1ª versão feita em 25/11/2026; próxima etapa, cor 4:4:4.
 4. **CI** (item 6): o usuário vai definir a esteira depois.

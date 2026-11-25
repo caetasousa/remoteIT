@@ -24,6 +24,7 @@ graph LR
 | 🖵 | **Tela cheia** capturando Win, Alt+Tab e afins (Keyboard Lock API) | técnico |
 | 🔒 | **Bloquear a tela** remota (como Win+L) e **logar com outra conta** do Windows | técnico |
 | 🛡️ | **Tela de login e de bloqueio** acessíveis no modo serviço | — |
+| 🖥️ | **Visualizador do técnico para Windows**: decodificação na GPU, todas as teclas (Win, Alt+Tab) sem tela cheia, área de transferência — junto com o console no navegador | técnico |
 | 🔐 | **Cada técnico com as suas máquinas**: o agente baixado (ou mandado por link) já sai no nome dele; só ele e os admins veem a máquina | técnico |
 | 🔗 | **Link de instalação** para o cliente baixar sem conta: com prazo e limite de máquinas, ou **permanente** | técnico |
 | 🪪 | **Credencial por máquina**: ninguém se passa por outro PC; **remover** revoga na hora | — |
@@ -162,6 +163,7 @@ sequenceDiagram
 | Eu quero... | Leia |
 |---|---|
 | 🧭 **entender cada fluxo** (conexão, vídeo, teclado, tela de bloqueio, contas) | [docs/FLUXOS.md](docs/FLUXOS.md) |
+| 🖥️ usar o **visualizador do técnico** (Windows) | [docs/VISUALIZADOR.md](docs/VISUALIZADOR.md) |
 | 🖥️ **instalar, atualizar ou remover** o agente e resolver problemas no Windows | [docs/AGENTE-WINDOWS.md](docs/AGENTE-WINDOWS.md) |
 | 🏗️ entender **como o código está organizado** | [docs/ARQUITETURA.md](docs/ARQUITETURA.md) |
 | 📡 ver **as mensagens** entre agente, relay e navegador | [docs/PROTOCOLO.md](docs/PROTOCOLO.md) |

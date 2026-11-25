@@ -15,6 +15,10 @@ O formato segue o [Keep a Changelog](https://keepachangelog.com/pt-BR/1.1.0/) e 
   acessam; **Remover** revoga a credencial. Não há compartilhamento entre técnicos.
 - **Link de instalação** (`/i/<código>`): o cliente baixa o agente sem conta; validade de 1 hora a
   7 dias ou **sem prazo**, de 1 a 100 máquinas ou **sem limite**, revogável.
+- **Visualizador do técnico para Windows** (`remoteit-tecnico.exe`, [ADR 0012](docs/adr/0012-visualizador-nativo.md),
+  [guia](docs/VISUALIZADOR.md)): login com a mesma conta, lista de máquinas, uma janela por sessão,
+  H.264 pelo Media Foundation (GPU quando possível), todas as teclas sem tela cheia, área de
+  transferência para o PC remoto (mensagem `clip`), atualização automática. O console continua.
 - **Atualização automática do agente** ([ADR 0011](docs/adr/0011-atualizacao-automatica.md)): versão
   em cada `.exe`, `dist/update.json` assinado com uma chave Ed25519 do projeto (`cmd/signupdate`), e o
   agente se troca sozinho, fora de atendimento, quando o relay anuncia outra versão. Coluna **Versão**

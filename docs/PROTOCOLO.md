@@ -44,6 +44,7 @@ Todas têm o campo `t` com o tipo. Campos com valor zero são omitidos.
 | `md` / `mu` | `x, y, b` (0 esq., 1 meio, 2 dir.) | botão pressionado / solto |
 | `wh` | `d` (múltiplos de 120) | roda do mouse |
 | `kd` / `ku` | `code, key` (do `KeyboardEvent`) | tecla pressionada / solta |
+| `clip` | `text` (até 1 MiB) | põe o texto na área de transferência do PC remoto (o técnico cola com Ctrl+V lá). Exige consentimento |
 | `lock` | | bloquear a estação (`LockWorkStation`, como Win+L). **Não** conta como entrada, mas também exige consentimento |
 
 > 🔒 `mm`, `md`, `mu`, `wh`, `kd` e `ku` são **entrada** (`Message.IsInput()`): o agente só as aplica depois do consentimento.

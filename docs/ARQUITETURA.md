@@ -97,8 +97,9 @@ graph TB
 ```
 cmd/
 ├── agent/main.go                    🚪 flags, edição, versão; monta session + media + input + lock + update
+├── relay/main.go                    🚪 ambiente, banco, migrations, admin inicial, httpapi, server
 ├── signupdate/main.go               🔑 chave de atualização e update.json assinado (usado pelo build.sh)
-└── relay/main.go                    🚪 ambiente, banco, migrations, admin inicial, httpapi, server
+└── viewer/                          🖥️ visualizador nativo do técnico (remoteit-tecnico.exe)
 internal/
 ├── protocol/                        📡 Message, Stats, CursorPos, AppendFrame/ParseFrame (12 bytes)
 ├── agent/
@@ -134,6 +135,10 @@ internal/
     ├── storage/postgres/            repositórios + migrations/*.sql (aplicadas ao iniciar)
     ├── server/                      HTTP/TLS (autocert ou certificado), desligamento gracioso
     └── web/                         embed do build do console (dist/)
+internal/viewer/
+├── client/                          API e protocolo do técnico, sem Windows (testado no Linux)
+├── decode/                          H.264 via Media Foundation (rcdec.h, GPU/CPU) e JPEG/PNG → BGRA
+└── win/                             Win32: login, lista, janela de sessão, GDI, hook de teclado
 frontend/src/
 ├── App.svelte                       🧭 roteamento por hash e abas
 ├── lib/api.ts                       🔌 cliente da API
@@ -249,3 +254,4 @@ técnico clica Conectar
 | [0009](adr/0009-refresh-de-nitidez.md) | Refresh de nitidez em PNG com a tela parada |
 | [0010](adr/0010-maquinas-por-tecnico.md) | Máquinas por técnico, com credencial por máquina |
 | [0011](adr/0011-atualizacao-automatica.md) | Atualização automática do agente, com assinatura própria |
+| [0012](adr/0012-visualizador-nativo.md) | Visualizador nativo para Windows, junto com o console |

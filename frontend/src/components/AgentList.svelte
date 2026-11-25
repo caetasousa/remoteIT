@@ -113,6 +113,10 @@
         Instalar como serviço (.exe) <span aria-hidden="true">↓</span>
       </a>
       <small>Acesso antes do login e na tela de bloqueio. Pede admin.</small>
+      <a class="btn pill download viewer" href={`/download/viewer.exe?t=${Date.now()}`}>
+        Visualizador do técnico (Windows) <span aria-hidden="true">↓</span>
+      </a>
+      <small>Para você: tela mais fluida e todas as teclas (Win, Alt+Tab) sem tela cheia.</small>
     </div>
 
     <form class="link-form" onsubmit={createLink} aria-label="Link de instalação">
@@ -224,6 +228,10 @@
   }
   .downloads small {
     margin: 0 0 8px 18px;
+  }
+  .viewer {
+    margin-top: 8px;
+    border-style: dashed;
   }
   .download {
     display: flex;

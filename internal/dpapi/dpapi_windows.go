@@ -1,6 +1,6 @@
 //go:build windows
 
-package machine
+package dpapi
 
 import (
 	"unsafe"
@@ -8,14 +8,14 @@ import (
 	"golang.org/x/sys/windows"
 )
 
-// protect cifra com o DPAPI: só esta máquina (machineScope) ou só este
+// Protect cifra com o DPAPI: só esta máquina (machineScope) ou só este
 // usuário nesta máquina consegue abrir. Copiar o arquivo para outro PC não
 // leva a credencial junto.
-func protect(b []byte, machineScope bool) ([]byte, error) {
+func Protect(b []byte, machineScope bool) ([]byte, error) {
 	return dpapi(b, machineScope, true)
 }
 
-func unprotect(b []byte, machineScope bool) ([]byte, error) {
+func Unprotect(b []byte, machineScope bool) ([]byte, error) {
 	return dpapi(b, machineScope, false)
 }
 

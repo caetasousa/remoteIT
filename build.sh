@@ -2,7 +2,8 @@
 # Gera os binários de produção em dist/:
 #   dist/suporte-ti.exe          agente Windows portátil (H.264 na GPU se o Zig estiver instalado)
 #   dist/suporte-ti-servico.exe  o mesmo agente, edição que instala o serviço com dois cliques
-#   dist/update.json             versão e assinaturas para a atualização automática dos agentes
+#   dist/remoteit-tecnico.exe    visualizador nativo do técnico (Windows), usado junto com o console
+#   dist/update.json             versão e assinaturas para a atualização automática
 #   dist/relay            relay Linux, com o console Svelte embutido
 #
 # Uso: RELAY=wss://suporte.seudominio.com.br AGENT_KEY=suachave ./build.sh
@@ -45,6 +46,11 @@ if [ -x "$ZIG" ]; then
   CC="$ZIG cc -target x86_64-windows-gnu" CXX="$ZIG c++ -target x86_64-windows-gnu" \
   CGO_CFLAGS="-O2 -Wno-missing-braces" \
     go build -trimpath -ldflags "$LDF -X main.edition=servico -extldflags=-Wl,--subsystem,windows" -o dist/suporte-ti-servico.exe ./cmd/agent
+  echo ">> visualizador do técnico (Windows)"
+  CGO_ENABLED=1 GOOS=windows GOARCH=amd64 \
+  CC="$ZIG cc -target x86_64-windows-gnu" CXX="$ZIG c++ -target x86_64-windows-gnu" \
+  CGO_CFLAGS="-O2 -Wno-missing-braces" \
+    go build -trimpath -ldflags "-s -w -H=windowsgui -X main.relayURL=${RELAY/wss:/https:} -X main.version=$VERSION -X main.updatePublicKey=$UPDATE_PUB -extldflags=-Wl,--subsystem,windows" -o dist/remoteit-tecnico.exe ./cmd/viewer
 else
   echo "!! zig não encontrado: agente SEM H.264 (só JPEG). Instale o zig para a versão rápida."
   CGO_ENABLED=0 GOOS=windows GOARCH=amd64 go build -trimpath -ldflags "$LDF" -o dist/suporte-ti.exe ./cmd/agent

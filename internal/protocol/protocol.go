@@ -29,7 +29,13 @@ const (
 	// tela de bloqueio (Winlogon), então o agente chama LockWorkStation
 	// diretamente. Veja internal/agent/lock.
 	TypeLock = "lock"
+	// TypeClipboard põe Text na área de transferência do PC remoto (o
+	// técnico cola com Ctrl+V lá). Como o input, só com consentimento.
+	TypeClipboard = "clip"
 )
+
+// MaxClipboard é o maior texto aceito em TypeClipboard (em bytes).
+const MaxClipboard = 1 << 20
 
 // Mensagens enviadas pelo relay ao agente.
 const (
@@ -61,6 +67,7 @@ type Message struct {
 	H264 bool    `json:"h264,omitempty"`
 	S    uint32  `json:"s,omitempty"`
 	P    string  `json:"p,omitempty"`
+	Text string  `json:"text,omitempty"`
 }
 
 // IsInput informa se a mensagem é um evento de mouse ou teclado. O agente só

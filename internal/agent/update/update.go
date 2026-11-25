@@ -1,4 +1,5 @@
-// Package update mantém o agente na versão que o relay anuncia
+// Package update mantém o agente (e o visualizador do técnico) na versão que
+// o relay anuncia
 // (docs/adr/0011-atualizacao-automatica.md).
 //
 // Ao conectar e a cada hora, o agente pergunta ao relay qual é a versão da
@@ -52,6 +53,13 @@ type Updater struct {
 	Logger    *slog.Logger
 	Interval  time.Duration
 	Client    *http.Client
+
+	// Offer e Download, se definidos, trocam a origem da atualização (o
+	// visualizador do técnico usa a sessão do usuário em vez da credencial
+	// de máquina). Sem eles, valem RelayURL + Creds. A verificação de
+	// assinatura e de hash é a mesma nos dois casos.
+	Offer    func(ctx context.Context) (offer protocol.UpdateOffer, available bool, err error)
+	Download func(ctx context.Context) ([]byte, error)
 
 	once sync.Once
 	kick chan struct{}
@@ -112,28 +120,8 @@ func (u *Updater) Run(ctx context.Context) {
 
 // Check faz uma checagem completa e, havendo versão nova, chama Apply.
 func (u *Updater) Check(ctx context.Context) error {
-	creds, err := u.Creds(ctx)
-	if err != nil || creds.MachineID == "" {
-		return err // agente legado não se atualiza
-	}
-	base, err := httpBase(u.RelayURL)
-	if err != nil {
-		return err
-	}
-	q := url.Values{"mid": {creds.MachineID}, "edition": {u.Edition}}.Encode()
-
-	var offer protocol.UpdateOffer
-	body, status, err := u.get(ctx, base+"/api/agent/update?"+q, creds.Secret, 1<<16)
-	if err != nil {
-		return err
-	}
-	if status == http.StatusNoContent {
-		return nil
-	}
-	if status != http.StatusOK {
-		return fmt.Errorf("update: oferta respondeu HTTP %d", status)
-	}
-	if err := json.Unmarshal(body, &offer); err != nil {
+	offer, available, err := u.offer(ctx)
+	if err != nil || !available {
 		return err
 	}
 	if offer.Version == "" || offer.Version == u.Current {
@@ -146,13 +134,9 @@ func (u *Updater) Check(ctx context.Context) error {
 	if u.Busy() {
 		return ErrBusy
 	}
-
-	exe, status, err := u.get(ctx, base+"/api/agent/update/"+u.Edition+"?"+url.Values{"mid": {creds.MachineID}}.Encode(), creds.Secret, maxExe)
+	exe, err := u.download(ctx)
 	if err != nil {
 		return err
-	}
-	if status != http.StatusOK {
-		return fmt.Errorf("update: download respondeu HTTP %d", status)
 	}
 	sum := sha256.Sum256(exe)
 	if hex.EncodeToString(sum[:]) != offer.SHA256 {
@@ -162,8 +146,53 @@ func (u *Updater) Check(ctx context.Context) error {
 	if u.Busy() { // um técnico pode ter entrado durante o download
 		return ErrBusy
 	}
-	u.Logger.Info("atualizando o agente", "de", u.Current, "para", offer.Version)
+	u.Logger.Info("atualizando", "de", u.Current, "para", offer.Version)
 	return u.Apply(exe)
+}
+
+func (u *Updater) offer(ctx context.Context) (protocol.UpdateOffer, bool, error) {
+	if u.Offer != nil {
+		return u.Offer(ctx)
+	}
+	var offer protocol.UpdateOffer
+	creds, err := u.Creds(ctx)
+	if err != nil || creds.MachineID == "" {
+		return offer, false, err // agente legado não se atualiza
+	}
+	base, err := httpBase(u.RelayURL)
+	if err != nil {
+		return offer, false, err
+	}
+	q := url.Values{"mid": {creds.MachineID}, "edition": {u.Edition}}.Encode()
+	body, status, err := u.get(ctx, base+"/api/agent/update?"+q, creds.Secret, 1<<16)
+	switch {
+	case err != nil:
+		return offer, false, err
+	case status == http.StatusNoContent:
+		return offer, false, nil
+	case status != http.StatusOK:
+		return offer, false, fmt.Errorf("update: oferta respondeu HTTP %d", status)
+	}
+	return offer, true, json.Unmarshal(body, &offer)
+}
+
+func (u *Updater) download(ctx context.Context) ([]byte, error) {
+	if u.Download != nil {
+		return u.Download(ctx)
+	}
+	creds, err := u.Creds(ctx)
+	if err != nil {
+		return nil, err
+	}
+	base, err := httpBase(u.RelayURL)
+	if err != nil {
+		return nil, err
+	}
+	exe, status, err := u.get(ctx, base+"/api/agent/update/"+u.Edition+"?"+url.Values{"mid": {creds.MachineID}}.Encode(), creds.Secret, maxExe)
+	if err == nil && status != http.StatusOK {
+		err = fmt.Errorf("update: download respondeu HTTP %d", status)
+	}
+	return exe, err
 }
 
 func (u *Updater) get(ctx context.Context, url, secret string, limit int64) ([]byte, int, error) {

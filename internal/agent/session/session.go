@@ -38,7 +38,9 @@ type Config struct {
 	Input   input.Injector
 	// Lock bloqueia a estação de trabalho (veja internal/agent/lock). Nil
 	// desliga o recurso: a mensagem é ignorada em vez de travar o processo.
-	Lock      func()
+	Lock func()
+	// Clipboard põe um texto na área de transferência do PC. Nil desliga.
+	Clipboard func(text string)
 	NewStream func(media.Sender) Stream
 	// OnActive, se definido, é avisado quando um técnico entra (true) e sai
 	// (false). A atualização automática espera o fim do atendimento.
@@ -92,6 +94,10 @@ func (c *Controller) Handle(m protocol.Message) {
 		// mesma exigência do input: só com consentimento já concedido
 		if t.granted.Load() && c.cfg.Lock != nil {
 			c.cfg.Lock()
+		}
+	case protocol.TypeClipboard:
+		if t.granted.Load() && c.cfg.Clipboard != nil && len(m.Text) <= protocol.MaxClipboard {
+			c.cfg.Clipboard(m.Text)
 		}
 	default:
 		if m.IsInput() && t.granted.Load() {

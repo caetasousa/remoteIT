@@ -36,6 +36,9 @@
 //	GET    /download/agent.exe          agente portátil, marcado com um código do técnico
 //	GET    /download/agent-servico.exe  agente que instala o serviço, marcado
 //	GET    /i/{code}            público: .exe de um link de instalação
+//	GET    /download/viewer.exe visualizador nativo do técnico (Windows)
+//	GET    /api/viewer/update   versão disponível do visualizador (assinada)
+//	GET    /api/viewer/update.exe  o visualizador, para a atualização
 //	GET    /healthz             público: relay e banco respondendo
 //	GET    /                    arquivos do console (Svelte)
 package httpapi
@@ -77,6 +80,9 @@ type Config struct {
 	// AgentServiceExe é o .exe da edição de serviço, servido em
 	// /download/agent-servico.exe. Vazio desativa a rota.
 	AgentServiceExe string
+	// ViewerExe é o visualizador nativo do técnico (remoteit-tecnico.exe),
+	// servido em /download/viewer.exe e /api/viewer/update.exe.
+	ViewerExe string
 	// UpdateManifest é o update.json do build.sh (versão e assinaturas dos
 	// .exe). Vazio ou ausente: nenhuma atualização é oferecida.
 	UpdateManifest string
@@ -137,6 +143,9 @@ func New(cfg Config) http.Handler {
 	mux.HandleFunc("POST /api/agent/enroll", s.enrollAgent)
 	mux.HandleFunc("GET /api/agent/update", s.updateOffer)
 	mux.HandleFunc("GET /api/agent/update/{edition}", s.updateDownload)
+	mux.Handle("GET /api/viewer/update", s.auth(http.HandlerFunc(s.viewerOffer)))
+	mux.Handle("GET /api/viewer/update.exe", s.auth(http.HandlerFunc(s.viewerExe)))
+	mux.Handle("GET /download/viewer.exe", s.auth(http.HandlerFunc(s.viewerExe)))
 	mux.Handle("GET /api/users", s.admin(http.HandlerFunc(s.listUsers)))
 	mux.Handle("POST /api/users", s.admin(http.HandlerFunc(s.createUser)))
 	mux.Handle("DELETE /api/users/{id}", s.admin(http.HandlerFunc(s.deleteUser)))

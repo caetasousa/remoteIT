@@ -33,6 +33,7 @@ import (
 	"strings"
 	"sync/atomic"
 
+	"remoteit/internal/agent/clipboard"
 	"remoteit/internal/agent/consent"
 	"remoteit/internal/agent/desktop"
 	"remoteit/internal/agent/input"
@@ -142,11 +143,12 @@ func main() {
 		relayclient.Config{URL: relayURL, Host: host, User: user, Version: version, Auth: keeper, OnConnect: updater.Kick},
 		func(send media.Sender) relayclient.Handler {
 			return session.New(session.Config{
-				Host:     host,
-				Consent:  ask,
-				Input:    injector,
-				Lock:     lock.Station,
-				OnActive: busy.Store,
+				Host:      host,
+				Consent:   ask,
+				Input:     injector,
+				Lock:      lock.Station,
+				Clipboard: clipboard.Set,
+				OnActive:  busy.Store,
 				NewStream: func(s media.Sender) session.Stream {
 					return media.NewStream(encoders, s, logger)
 				},

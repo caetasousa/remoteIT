@@ -4,6 +4,8 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+
+	"remoteit/internal/dpapi"
 )
 
 // FileStore guarda a credencial num arquivo, protegido pelo DPAPI no
@@ -20,7 +22,7 @@ func (f FileStore) Load() (Credential, bool) {
 	if err != nil {
 		return Credential{}, false
 	}
-	if b, err = unprotect(b, f.MachineScope); err != nil {
+	if b, err = dpapi.Unprotect(b, f.MachineScope); err != nil {
 		return Credential{}, false
 	}
 	var c Credential
@@ -33,7 +35,7 @@ func (f FileStore) Load() (Credential, bool) {
 // Save grava a credencial, substituindo a anterior de uma vez só.
 func (f FileStore) Save(c Credential) error {
 	b, _ := json.Marshal(c)
-	b, err := protect(b, f.MachineScope)
+	b, err := dpapi.Protect(b, f.MachineScope)
 	if err != nil {
 		return err
 	}

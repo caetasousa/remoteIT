@@ -23,6 +23,7 @@ import (
 	"remoteit/internal/agent/update"
 	"remoteit/internal/protocol"
 	"remoteit/internal/relay/httpapi"
+	viewer "remoteit/internal/viewer/client"
 )
 
 // signedDist monta uma pasta dist/ como o build.sh: os dois .exe e o
@@ -174,4 +175,47 @@ func TestAgentVersionListed(t *testing.T) {
 	}
 	defer ag.Close()
 	eventually(t, func() bool { m, _ := ana.machine(id2); return m.Version == "2026.11.25.0300" }, "versão não apareceu na lista")
+}
+
+// O visualizador do técnico se baixa e se atualiza com a sessão do usuário
+// (não tem credencial de máquina), e a oferta dele vem assinada como as dos agentes.
+func TestViewerDownloadAndUpdate(t *testing.T) {
+	dir := t.TempDir()
+	os.WriteFile(filepath.Join(dir, "suporte-ti.exe"), fakeExe("portatil"), 0o644)
+	os.WriteFile(filepath.Join(dir, "suporte-ti-servico.exe"), fakeExe("servico"), 0o644)
+	os.WriteFile(filepath.Join(dir, "remoteit-tecnico.exe"), []byte("visualizador-v2"), 0o644)
+	key := filepath.Join(t.TempDir(), "k")
+	run := func(args ...string) string {
+		out, err := exec.Command("go", append([]string{"run", "remoteit/cmd/signupdate", "-key", key}, args...)...).Output()
+		if err != nil {
+			t.Fatal(err)
+		}
+		return string(out)
+	}
+	run("-genkey")
+	pubB, _ := base64.StdEncoding.DecodeString(run("-pub"))
+	run("-sign", dir, "-version", "2026.11.25.0500")
+	e := newEnv(t, func(c *httpapi.Config) {
+		withDist(dir)(c)
+		c.ViewerExe = filepath.Join(dir, "remoteit-tecnico.exe")
+	})
+
+	for _, p := range []string{"/download/viewer.exe", "/api/viewer/update", "/api/viewer/update.exe"} {
+		if r, _ := http.Get(e.srv.URL + p); r.StatusCode != http.StatusUnauthorized {
+			t.Errorf("%s sem login: status %d", p, r.StatusCode)
+		}
+	}
+	api, _ := viewer.New(e.srv.URL)
+	api.Login(t.Context(), e.newTechName("ana"), "senha-ana")
+	offer, ok, err := api.UpdateOffer(t.Context())
+	if err != nil || !ok || offer.Version != "2026.11.25.0500" {
+		t.Fatalf("oferta = %+v, %v, %v", offer, ok, err)
+	}
+	if err := protocol.VerifyUpdate(ed25519.PublicKey(pubB), "tecnico", offer); err != nil {
+		t.Errorf("a oferta do visualizador deveria vir assinada: %v", err)
+	}
+	exe, err := api.DownloadUpdate(t.Context())
+	if err != nil || string(exe) != "visualizador-v2" {
+		t.Errorf("download = %q, %v", exe, err)
+	}
 }

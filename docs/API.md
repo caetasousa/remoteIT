@@ -33,6 +33,9 @@
 | `DELETE /api/links/{id}` | dono do link ou admin | | 204 · 404 |
 | `GET /api/agent/update?mid=&edition=` | credencial da máquina | | 200 `{version, sha256, signature, size}` do `update.json` · 204 sem atualização publicada · 401/403 |
 | `GET /api/agent/update/{edition}?mid=` | credencial da máquina | | o `.exe` da edição, **sem** código gravado ([ADR 0011](adr/0011-atualizacao-automatica.md)) |
+| `GET /download/viewer.exe` | logado | | o visualizador nativo do técnico (`remoteit-tecnico.exe`) |
+| `GET /api/viewer/update` | logado | | oferta assinada da edição `tecnico` · 204 sem atualização |
+| `GET /api/viewer/update.exe` | logado | | o visualizador, para a atualização automática |
 | `GET /i/{código}` | **público** | | o `.exe` da edição do link, marcado com o código · 404 inválido/vencido/esgotado · 429 (200/dia por IP) |
 | `POST /api/agent/enroll` | **público** + código | `{code, name}` | 201 `{id, secret}` · 403 código inválido · 400 · 429 (120/h por IP) |
 | `GET /api/users` | admin | | 200 `User[]` · 403 |

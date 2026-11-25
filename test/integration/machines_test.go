@@ -32,6 +32,12 @@ func (e *env) newTech(name string) *client {
 	return e.login(name, "senha-"+name)
 }
 
+// newTechName cadastra um técnico e devolve o nome (senha "senha-"+nome).
+func (e *env) newTechName(name string) string {
+	e.newTech(name)
+	return name
+}
+
 // downloadCode baixa o .exe pelo console e devolve o código gravado nele.
 func (c *client) downloadCode(path string) string {
 	c.e.t.Helper()
