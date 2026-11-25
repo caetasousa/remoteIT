@@ -9,6 +9,12 @@ O formato segue o [Keep a Changelog](https://keepachangelog.com/pt-BR/1.1.0/) e 
 
 ### Added
 
+- **Visualizador do técnico com interface nova**: cabeçalho com usuário e papel, busca, lista com
+  estado colorido, usuário logado, dono e versão do agente, rodapé com o que o PC decodifica
+  (H.264, 4:4:4, AV1); na sessão, **barra de telemetria** (codec, GPU/CPU, resolução, FPS
+  desenhados, banda e RTT colorido) com o motivo de o 4:4:4 não estar em uso, avisos num cartão
+  central e **Ajuda ▸ Diagnóstico de vídeo**. Erros de login em frases claras. Regras em
+  `internal/viewer/ui`, testadas no Linux.
 - **Negociação de codecs** ([ADR 0013](docs/adr/0013-codecs-e-negociacao.md)): o `hello` leva
   `codecs`, a lista do que o técnico decodifica em ordem de preferência; o agente abre o primeiro que
   conseguir e cai sozinho para o próximo se um encoder não abrir ou quebrar. O técnico também desiste

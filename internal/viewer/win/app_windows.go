@@ -16,6 +16,7 @@ import (
 	"golang.org/x/sys/windows"
 
 	"remoteit/internal/viewer/client"
+	"remoteit/internal/viewer/ui"
 )
 
 const (
@@ -25,6 +26,7 @@ const (
 	wmLoggedIn  = wmApp + 1 // login terminou (ok ou erro em a.loginErr)
 	wmList      = wmApp + 2 // lista de máquinas nova em a.machines
 	wmLoggedOut = wmApp + 3 // sessão expirou ou o usuário saiu
+	wmCaps      = wmApp + 4 // terminou a sondagem dos decodificadores (a.caps)
 
 	idRelay   = 101
 	idUser    = 102
@@ -34,8 +36,15 @@ const (
 	idList    = 201
 	idConnect = 202
 	idLogout  = 203
-	idHello   = 204
-	idStatus  = 205
+	idSummary = 206
+	idFilter  = 207
+)
+
+// Medidas da janela principal, em pixels lógicos (96 dpi).
+const (
+	headerH = 64 // faixa da marca
+	footerH = 30 // rodapé com versão e decodificadores
+	rowH    = 52 // linha da lista de máquinas
 )
 
 // Settings é o que o visualizador lembra entre execuções.
@@ -76,12 +85,17 @@ type App struct {
 	hook     uintptr
 
 	font, bgBrush, panelBrush, editBrush uintptr
+	fontBold, fontSmall, fontTitle       uintptr
+	fontMono                             uintptr
 	dpi                                  int32
+	caps                                 decoders // o que este PC decodifica
+	capsKnown                            bool
+	rows                                 []ui.Row // o que está na lista agora
 
 	mu       sync.Mutex
 	loginErr error
+	fromForm bool // o último login veio do formulário (não da sessão guardada)
 	machines []client.Machine
-	shown    []client.Machine // o que está na lista agora (thread da janela)
 	stopList context.CancelFunc
 }
 
@@ -114,12 +128,27 @@ func Run(opts Options) error {
 		}
 	}
 
-	a.main = a.createWindow(mainClass, "RemoteIT — Técnico", wsOverlappedWindow&^0x00040000&^0x00010000|wsClipChildren, 460, 560, 0)
+	a.main = a.createWindow(mainClass, "RemoteIT — Técnico", wsOverlappedWindow&^0x00040000&^0x00010000|wsClipChildren, 480, 640, 0)
 	a.handlers[a.main] = a.mainProc
 	dpi, _, _ := pGetDpiForWindow.Call(uintptr(a.main))
 	a.dpi = int32(max(dpi, 96))
-	a.font, _, _ = pCreateFontW.Call(uintptr(-a.px(15)), 0, 0, 0, 400, 0, 0, 0, 1, 0, 0, 5, 0, uintptr(unsafe.Pointer(utf16("Segoe UI"))))
+	a.font = a.newFont(15, 400, "Segoe UI")
+	a.fontBold = a.newFont(15, 600, "Segoe UI")
+	a.fontSmall = a.newFont(12, 400, "Segoe UI")
+	a.fontTitle = a.newFont(22, 600, "Segoe UI")
+	a.fontMono = a.newFont(13, 400, "Consolas")
 	a.buildControls()
+	// o que este PC decodifica aparece no rodapé; os decodificadores do
+	// Windows ficam presos à thread, então a sondagem tem a sua
+	go func() {
+		runtime.LockOSThread()
+		defer runtime.UnlockOSThread()
+		c := probeDecoders()
+		a.mu.Lock()
+		a.caps, a.capsKnown = c, true
+		a.mu.Unlock()
+		post(a.main, wmCaps)
+	}()
 
 	// teclado: um hook só, que entrega as teclas à sessão em primeiro plano
 	hcb := syscall.NewCallback(keyboardHook)
@@ -136,8 +165,12 @@ func Run(opts Options) error {
 		if int32(r) <= 0 {
 			return nil
 		}
-		if m.Message == wmKeyDown && m.WParam == 0x0D && a.isLoginField(m.Hwnd) { // Enter no formulário
+		if m.Message == wmKeyDown && m.WParam == vkReturn && a.isLoginField(m.Hwnd) { // Enter no formulário
 			a.login()
+			continue
+		}
+		if m.Message == wmKeyDown && m.WParam == vkReturn && (m.Hwnd == a.ctl[idList] || m.Hwnd == a.ctl[idFilter]) {
+			a.connectSelected() // Enter na lista ou na busca conecta
 			continue
 		}
 		if r, _, _ := pIsDialogMessageW.Call(uintptr(a.main), uintptr(unsafe.Pointer(&m))); r != 0 {
@@ -149,6 +182,12 @@ func Run(opts Options) error {
 }
 
 func (a *App) px(v int32) int32 { return v * a.dpi / 96 }
+
+// newFont cria uma fonte de size pixels lógicos (ClearType).
+func (a *App) newFont(size, weight int32, face string) uintptr {
+	f, _, _ := pCreateFontW.Call(uintptr(-a.px(size)), 0, 0, 0, uintptr(weight), 0, 0, 0, 1, 0, 0, 5, 0, uintptr(unsafe.Pointer(utf16(face))))
+	return f
+}
 
 func (a *App) createWindow(class, title string, style uintptr, w, h int32, parent windows.HWND) windows.HWND {
 	scale := func(v int32) uintptr {
@@ -171,21 +210,24 @@ func (a *App) control(id int, class, text string, style uintptr, x, y, w, h int3
 }
 
 func (a *App) buildControls() {
+	top := int32(headerH + 24)
 	// login
-	a.control(301, "STATIC", "Relay", ssLeft, 32, 28, 380, 20)
-	a.control(idRelay, "EDIT", a.settings.Relay, wsBorder|wsTabStop|esAutoHScroll, 32, 50, 380, 28)
-	a.control(302, "STATIC", "Usuário ou e-mail", ssLeft, 32, 92, 380, 20)
-	a.control(idUser, "EDIT", a.settings.Username, wsBorder|wsTabStop|esAutoHScroll, 32, 114, 380, 28)
-	a.control(303, "STATIC", "Senha", ssLeft, 32, 156, 380, 20)
-	a.control(idPass, "EDIT", "", wsBorder|wsTabStop|esAutoHScroll|esPassword, 32, 178, 380, 28)
-	a.control(idLogin, "BUTTON", "Entrar", wsTabStop|bsDefPushButton, 32, 222, 380, 34)
-	a.control(idError, "STATIC", "", ssLeft, 32, 270, 380, 60)
+	a.control(301, "STATIC", "Endereço do relay", ssLeft, 32, top, 400, 20)
+	a.control(idRelay, "EDIT", a.settings.Relay, wsBorder|wsTabStop|esAutoHScroll, 32, top+22, 400, 30)
+	a.control(302, "STATIC", "Usuário ou e-mail", ssLeft, 32, top+66, 400, 20)
+	a.control(idUser, "EDIT", a.settings.Username, wsBorder|wsTabStop|esAutoHScroll, 32, top+88, 400, 30)
+	a.control(303, "STATIC", "Senha", ssLeft, 32, top+132, 400, 20)
+	a.control(idPass, "EDIT", "", wsBorder|wsTabStop|esAutoHScroll|esPassword, 32, top+154, 400, 30)
+	a.control(idLogin, "BUTTON", "Entrar", wsTabStop|bsOwnerDraw, 32, top+204, 400, 38)
+	a.control(idError, "STATIC", "", ssLeft, 32, top+254, 400, 60)
 	// lista
-	a.control(idHello, "STATIC", "", ssLeft, 24, 18, 400, 22)
-	a.control(idList, "LISTBOX", "", wsBorder|wsTabStop|wsVScroll|lbsNotify|lbsNoIntegralHeight, 24, 46, 396, 380)
-	a.control(idConnect, "BUTTON", "Conectar", wsTabStop|bsDefPushButton, 24, 436, 200, 34)
-	a.control(idLogout, "BUTTON", "Sair", wsTabStop, 232, 436, 188, 34)
-	a.control(idStatus, "STATIC", "versão "+orDash(a.opts.Version), ssLeft, 24, 480, 396, 20)
+	a.control(304, "STATIC", "Buscar por nome, dono ou usuário", ssLeft, 24, headerH+12, 416, 20)
+	a.control(idFilter, "EDIT", "", wsBorder|wsTabStop|esAutoHScroll, 24, headerH+34, 416, 30)
+	a.control(idSummary, "STATIC", "", ssLeft, 24, headerH+74, 416, 20)
+	a.control(idList, "LISTBOX", "", wsTabStop|wsVScroll|lbsNotify|lbsNoIntegralHeight|lbsOwnerDrawFixed|lbsHasStrings,
+		24, headerH+98, 416, 310)
+	a.control(idConnect, "BUTTON", "Conectar", wsTabStop|bsOwnerDraw, 24, headerH+420, 264, 38)
+	a.control(idLogout, "BUTTON", "Sair", wsTabStop|bsOwnerDraw, 296, headerH+420, 144, 38)
 }
 
 func orDash(s string) string {
@@ -203,9 +245,10 @@ func (a *App) showLogin(on bool) {
 	for _, id := range []int{301, idRelay, 302, idUser, 303, idPass, idLogin, idError} {
 		show(a.ctl[id], on)
 	}
-	for _, id := range []int{idHello, idList, idConnect, idLogout} {
+	for _, id := range []int{304, idFilter, idSummary, idList, idConnect, idLogout} {
 		show(a.ctl[id], !on)
 	}
+	pInvalidateRect.Call(uintptr(a.main), 0, 1) // o cabeçalho muda (usuário)
 	if on {
 		f := a.ctl[idPass]
 		if getText(a.ctl[idUser]) == "" {
@@ -230,13 +273,13 @@ func (a *App) start() {
 	}
 	api.SetToken(a.settings.Token)
 	a.showLogin(false)
-	setText(a.ctl[idHello], "Conectando ao relay…")
+	setText(a.ctl[idSummary], "Conectando ao relay…")
 	go func() {
 		ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
 		defer cancel()
 		u, err := api.Me(ctx)
 		a.mu.Lock()
-		a.loginErr = err
+		a.loginErr, a.fromForm = err, false
 		if err == nil {
 			a.api, a.user = api, u
 		}
@@ -259,7 +302,7 @@ func (a *App) login() {
 		defer cancel()
 		u, err := api.Login(ctx, user, pass)
 		a.mu.Lock()
-		a.loginErr = err
+		a.loginErr, a.fromForm = err, true
 		if err == nil {
 			a.api, a.user = api, u
 			a.settings = Settings{Relay: relay, Username: user, Token: api.Token()}
@@ -272,15 +315,11 @@ func (a *App) login() {
 func (a *App) afterLogin() {
 	pEnableWindow.Call(uintptr(a.ctl[idLogin]), 1)
 	a.mu.Lock()
-	err := a.loginErr
+	err, form := a.loginErr, a.fromForm
 	a.mu.Unlock()
 	if err != nil {
 		a.showLogin(true)
-		msg := err.Error()
-		if errors.Is(err, client.ErrUnauthorized) {
-			msg = "Sua sessão expirou. Entre de novo."
-		}
-		setText(a.ctl[idError], msg)
+		setText(a.ctl[idError], ui.LoginError(err, form))
 		return
 	}
 	setText(a.ctl[idError], "")
@@ -291,7 +330,7 @@ func (a *App) afterLogin() {
 	if a.opts.OnLogin != nil {
 		a.opts.OnLogin(a.api)
 	}
-	setText(a.ctl[idHello], "Olá, "+a.user.Username+". Suas máquinas:")
+	setText(a.ctl[idSummary], "Carregando as máquinas…")
 	a.showLogin(false)
 	ctx, cancel := context.WithCancel(context.Background())
 	a.stopList = cancel
@@ -323,47 +362,121 @@ func (a *App) updateList() {
 	a.mu.Lock()
 	list := a.machines
 	a.mu.Unlock()
-	sel, _, _ := pSendMessageW.Call(uintptr(a.ctl[idList]), lbGetCurSel, 0, 0)
+	lb := uintptr(a.ctl[idList])
+	sel, _, _ := pSendMessageW.Call(lb, lbGetCurSel, 0, 0)
 	selID := ""
-	if int(sel) >= 0 && int(sel) < len(a.shown) {
-		selID = a.shown[sel].ID
+	if int(sel) >= 0 && int(sel) < len(a.rows) {
+		selID = a.rows[sel].Machine.ID
 	}
-	pSendMessageW.Call(uintptr(a.ctl[idList]), lbResetContent, 0, 0)
+	rows := ui.Rows(list, getText(a.ctl[idFilter]), a.user)
+	pSendMessageW.Call(lb, 0x000B, 0, 0) // WM_SETREDRAW off: sem piscar a cada 3 s
+	pSendMessageW.Call(lb, lbResetContent, 0, 0)
 	newSel := -1
-	for i, m := range list {
-		state := "offline"
-		if m.Online {
-			state = "online"
-			if m.ViewedBy != "" {
-				state = "em uso por " + m.ViewedBy
-			}
-		}
-		line := fmt.Sprintf("%s  %s  —  %s", map[bool]string{true: "●", false: "○"}[m.Online], m.Name, state)
-		if a.user.Role == "admin" && m.Owner != "" && m.Owner != a.user.Username {
-			line += "  (" + m.Owner + ")"
-		}
-		pSendMessageW.Call(uintptr(a.ctl[idList]), lbAddString, 0, uintptr(unsafe.Pointer(utf16(line))))
-		if m.ID == selID {
-			newSel = i
+	for i, r := range rows {
+		pSendMessageW.Call(lb, lbAddString, 0, uintptr(unsafe.Pointer(utf16(r.Title))))
+		if r.Machine.ID == selID || (selID == "" && newSel < 0 && r.State != ui.Offline) {
+			newSel = i // mantém a seleção; sem ela, a primeira online
 		}
 	}
 	if newSel >= 0 {
-		pSendMessageW.Call(uintptr(a.ctl[idList]), lbSetCurSel, uintptr(newSel), 0)
+		pSendMessageW.Call(lb, lbSetCurSel, uintptr(newSel), 0)
 	}
-	a.shown = list
-	if len(list) == 0 {
-		setText(a.ctl[idStatus], "Nenhuma máquina. Gere um link de instalação no console web.")
-	} else {
-		setText(a.ctl[idStatus], "versão "+orDash(a.opts.Version))
+	pSendMessageW.Call(lb, 0x000B, 1, 0)
+	pInvalidateRect.Call(lb, 0, 1)
+	a.rows = rows
+	switch {
+	case len(list) == 0:
+		setText(a.ctl[idSummary], "Nenhuma máquina. Gere um link de instalação no console web.")
+	case len(rows) == 0:
+		setText(a.ctl[idSummary], "Nenhuma máquina com esse nome.")
+	default:
+		setText(a.ctl[idSummary], ui.Summary(list))
 	}
+}
+
+// paintMain desenha o cabeçalho (marca e usuário) e o rodapé (versão e o
+// que este PC decodifica); os controles se desenham sozinhos por cima.
+func (a *App) paintMain() {
+	var ps paintStruct
+	hdc, _, _ := pBeginPaint.Call(uintptr(a.main), uintptr(unsafe.Pointer(&ps)))
+	defer pEndPaint.Call(uintptr(a.main), uintptr(unsafe.Pointer(&ps)))
+	var rc rect
+	pGetClientRect.Call(uintptr(a.main), uintptr(unsafe.Pointer(&rc)))
+	head := rect{0, 0, rc.Right, a.px(headerH)}
+	fillRect(hdc, head, colorPanel)
+	fillRect(hdc, rect{0, head.Bottom - 1, rc.Right, head.Bottom}, colorLine)
+	x := a.px(24)
+	drawString(hdc, rect{x, 0, rc.Right, head.Bottom}, "RemoteIT", a.fontTitle, colorAccent, dtLeft)
+	x += textWidth(hdc, "RemoteIT", a.fontTitle) + a.px(8)
+	drawString(hdc, rect{x, a.px(4), rc.Right, head.Bottom}, "técnico", a.fontSmall, colorMuted, dtLeft)
+
+	a.mu.Lock()
+	logged := a.api != nil && a.user.Username != ""
+	user, role := a.user.Username, a.user.Role
+	caps, known := a.caps, a.capsKnown
+	a.mu.Unlock()
+	if logged && !isVisible(a.ctl[idLogin]) {
+		r := rect{0, a.px(12), rc.Right - a.px(24), a.px(34)}
+		drawString(hdc, r, user, a.fontBold, colorText, dtRight)
+		label := "técnico"
+		if role == "admin" {
+			label = "administrador"
+		}
+		drawString(hdc, rect{0, a.px(32), rc.Right - a.px(24), a.px(52)}, label, a.fontSmall, colorMuted, dtRight)
+	}
+
+	foot := rect{0, rc.Bottom - a.px(footerH), rc.Right, rc.Bottom}
+	fillRect(hdc, foot, colorPanel)
+	fillRect(hdc, rect{0, foot.Top, rc.Right, foot.Top + 1}, colorLine)
+	text := "versão " + orDash(a.opts.Version)
+	if known {
+		text += "  ·  " + ui.Decoders(caps.h264, caps.av1)
+	}
+	drawString(hdc, rect{a.px(24), foot.Top, rc.Right - a.px(24), foot.Bottom}, text, a.fontSmall, colorMuted, dtLeft)
+}
+
+// drawRow desenha uma máquina: ponto de estado, nome e detalhes.
+func (a *App) drawRow(d *drawItemStruct) {
+	r := d.RcItem
+	if int(d.ItemID) < 0 || int(d.ItemID) >= len(a.rows) {
+		fillRect(d.HDC, r, colorBg)
+		return
+	}
+	row := a.rows[d.ItemID]
+	selected := d.ItemState&odsSelected != 0
+	bg := uintptr(colorBg)
+	if selected {
+		bg = colorSel
+	}
+	fillRect(d.HDC, r, bg)
+	if selected {
+		fillRect(d.HDC, rect{r.Left, r.Top, r.Left + a.px(3), r.Bottom}, colorAccent)
+	}
+	fillRect(d.HDC, rect{r.Left, r.Bottom - 1, r.Right, r.Bottom}, colorLine)
+	dotColor, titleColor := uintptr(colorMuted), uintptr(colorMuted)
+	switch row.State {
+	case ui.Online:
+		dotColor, titleColor = colorGood, colorText
+	case ui.InUse:
+		dotColor, titleColor = colorWarn, colorText
+	}
+	mid := (r.Top + r.Bottom) / 2
+	dot(d.HDC, r.Left+a.px(18), mid, a.px(5), dotColor)
+	x := r.Left + a.px(34)
+	drawString(d.HDC, rect{x, r.Top + a.px(6), r.Right - a.px(8), mid}, row.Title, a.fontBold, titleColor, dtLeft)
+	detail := uintptr(colorMuted)
+	if row.State == ui.InUse {
+		detail = colorWarn
+	}
+	drawString(d.HDC, rect{x, mid, r.Right - a.px(8), r.Bottom - a.px(6)}, row.Detail, a.fontSmall, detail, dtLeft)
 }
 
 func (a *App) connectSelected() {
 	sel, _, _ := pSendMessageW.Call(uintptr(a.ctl[idList]), lbGetCurSel, 0, 0)
-	if int(sel) < 0 || int(sel) >= len(a.shown) {
+	if int(sel) < 0 || int(sel) >= len(a.rows) {
 		return
 	}
-	m := a.shown[sel]
+	m := a.rows[sel].Machine
 	if !m.Online {
 		messageBox(a.main, "RemoteIT", m.Name+" está offline.")
 		return
@@ -412,9 +525,39 @@ func (a *App) mainProc(hwnd windows.HWND, m uint32, wp, lp uintptr) (uintptr, bo
 		a.logout()
 		setText(a.ctl[idError], "Sua sessão expirou. Entre de novo.")
 		return 0, true
+	case wmCaps:
+		pInvalidateRect.Call(uintptr(hwnd), 0, 1)
+		return 0, true
+	case wmPaint:
+		a.paintMain()
+		return 0, true
+	case wmMeasureItem:
+		var mi measureItemStruct
+		pRtlMoveMemory.Call(uintptr(unsafe.Pointer(&mi)), lp, unsafe.Sizeof(mi))
+		if mi.CtlType == odtListbox {
+			mi.ItemHeight = uint32(a.px(rowH))
+			pRtlMoveMemory.Call(lp, uintptr(unsafe.Pointer(&mi)), unsafe.Sizeof(mi))
+		}
+		return 1, true
+	case wmDrawItem:
+		d := new(drawItemStruct)
+		pRtlMoveMemory.Call(uintptr(unsafe.Pointer(d)), lp, unsafe.Sizeof(*d))
+		switch {
+		case d.CtlType == odtListbox:
+			a.drawRow(d)
+		case d.CtlType == odtButton && d.CtlID == idLogin:
+			a.drawButton(d, "Entrar", true)
+		case d.CtlType == odtButton && d.CtlID == idConnect:
+			a.drawButton(d, "Conectar", true)
+		case d.CtlType == odtButton && d.CtlID == idLogout:
+			a.drawButton(d, "Sair", false)
+		}
+		return 1, true
 	case wmCommand:
 		id, code := int(loword(wp)), hiword(wp)
 		switch {
+		case id == idFilter && code == enChange:
+			a.updateList()
 		case id == idLogin && code == bnClicked:
 			a.login()
 		case id == idConnect && code == bnClicked:
@@ -431,8 +574,17 @@ func (a *App) mainProc(hwnd windows.HWND, m uint32, wp, lp uintptr) (uintptr, bo
 		if m != wmCtlColorStatic {
 			bg, brush = 0x00000000, a.editBrush
 		}
-		if windows.HWND(lp) == a.ctl[idError] {
-			pSetTextColor.Call(wp, 0x008571FB) // #fb7185: erro
+		switch windows.HWND(lp) {
+		case a.ctl[idError]:
+			pSetTextColor.Call(wp, colorBad)
+		case a.ctl[idSummary], a.ctl[301], a.ctl[302], a.ctl[303], a.ctl[304]:
+			pSetTextColor.Call(wp, colorMuted)
+		}
+		switch m {
+		case wmCtlColorEdit:
+			bg, brush = colorPanel, a.panelBrush
+		case wmCtlColorListbox:
+			bg, brush = colorBg, a.bgBrush
 		}
 		pSetBkColor.Call(wp, bg)
 		return brush, true

@@ -139,7 +139,8 @@ internal/
 internal/viewer/
 ├── client/                          API e protocolo do técnico, sem Windows (testado no Linux)
 ├── decode/                          H.264, AVC444 e AV1 via Media Foundation (rcdec.h, GPU/CPU); yuv.h; JPEG/PNG → BGRA
-└── win/                             Win32: login, lista, janela de sessão, GDI, hook de teclado
+├── ui/                              o que as janelas mostram (lista, telemetria, aviso do 4:4:4, erros), Go puro e testado
+└── win/                             Win32: desenha o que sai de ui/ (GDI, owner-draw), mouse, hook de teclado
 frontend/src/
 ├── App.svelte                       🧭 roteamento por hash e abas
 ├── lib/api.ts                       🔌 cliente da API

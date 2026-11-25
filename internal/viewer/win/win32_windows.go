@@ -70,6 +70,7 @@ var (
 	pSetProcessDpiAwareness = user32.NewProc("SetProcessDpiAwarenessContext")
 	pGetDpiForWindow        = user32.NewProc("GetDpiForWindow")
 	pSetForegroundWindow    = user32.NewProc("SetForegroundWindow")
+	pIsWindowVisible        = user32.NewProc("IsWindowVisible")
 
 	pStretchDIBits     = gdi32.NewProc("StretchDIBits")
 	pSetStretchBltMode = gdi32.NewProc("SetStretchBltMode")
@@ -79,6 +80,10 @@ var (
 	pSetTextColor      = gdi32.NewProc("SetTextColor")
 	pSetBkMode         = gdi32.NewProc("SetBkMode")
 	pSetBkColor        = gdi32.NewProc("SetBkColor")
+	pCreatePen         = gdi32.NewProc("CreatePen")
+	pEllipse           = gdi32.NewProc("Ellipse")
+	pDeleteObject      = gdi32.NewProc("DeleteObject")
+	pIntersectClipRect = gdi32.NewProc("IntersectClipRect")
 
 	pGetModuleHandleW = kernel32.NewProc("GetModuleHandleW")
 	pGlobalLock       = kernel32.NewProc("GlobalLock")
@@ -183,7 +188,46 @@ const (
 	colorText   = 0x00D8D2C7
 	colorAccent = 0x00FFF000 // #00f0ff
 	colorMuted  = 0x00786B5B
+	colorLine   = 0x00332619 // #192633: divisórias
+	colorSel    = 0x00281A0C // #0c1a28: linha selecionada
+	colorGood   = 0x0099D334 // #34d399
+	colorWarn   = 0x0024BFFB // #fbbf24
+	colorBad    = 0x008571FB // #fb7185
+
+	wmDrawItem    = 0x002B
+	wmMeasureItem = 0x002C
+	wmKillFocus   = 0x0008
+
+	lbsOwnerDrawFixed = 0x0010
+	lbsHasStrings     = 0x0040
+	bsOwnerDraw       = 0x000B
+	enChange          = 0x0300
+	odsSelected       = 0x0001
+	odsDisabled       = 0x0004
+	odtListbox        = 2
+	odtButton         = 4
+	vkReturn          = 0x0D
+
+	dtLeft        = 0x0000
+	dtRight       = 0x0002
+	dtNoPrefix    = 0x0800
+	dtEndEllipsis = 0x8000
 )
+
+// drawItemStruct é o DRAWITEMSTRUCT do Win32 (lista e botões desenhados por nós).
+type drawItemStruct struct {
+	CtlType, CtlID, ItemID, ItemAction, ItemState uint32
+	HwndItem                                      windows.HWND
+	HDC                                           uintptr
+	RcItem                                        rect
+	ItemData                                      uintptr
+}
+
+// measureItemStruct é o MEASUREITEMSTRUCT do Win32.
+type measureItemStruct struct {
+	CtlType, CtlID, ItemID, ItemWidth, ItemHeight uint32
+	ItemData                                      uintptr
+}
 
 type point struct{ X, Y int32 }
 
@@ -286,7 +330,17 @@ func show(h windows.HWND, visible bool) {
 	pShowWindow.Call(uintptr(h), c)
 }
 
+func isVisible(h windows.HWND) bool {
+	r, _, _ := pIsWindowVisible.Call(uintptr(h))
+	return r != 0
+}
+
 func post(h windows.HWND, m uint32) { pPostMessageW.Call(uintptr(h), uintptr(m), 0, 0) }
+
+// infoBox é um aviso com o ícone de informação (o diagnóstico, por exemplo).
+func infoBox(owner windows.HWND, title, text string) {
+	pMessageBoxW.Call(uintptr(owner), uintptr(unsafe.Pointer(utf16(text))), uintptr(unsafe.Pointer(utf16(title))), 0x40)
+}
 
 func messageBox(owner windows.HWND, title, text string) {
 	pMessageBoxW.Call(uintptr(owner), uintptr(unsafe.Pointer(utf16(text))), uintptr(unsafe.Pointer(utf16(title))), 0x30)

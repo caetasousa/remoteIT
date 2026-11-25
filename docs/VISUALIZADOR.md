@@ -26,8 +26,9 @@ O login fica guardado (protegido pelo Windows, só para o seu usuário) em `%LOC
 
 ## 🧭 Usar
 
-* **Lista:** as suas máquinas (admins veem todas), atualizada a cada 3 s. Dois cliques ou **Conectar** abrem uma janela por máquina.
-* **Título da janela:** codec, resolução, FPS, banda, RTT e se a decodificação está na GPU. Com 4:4:4 em uso, o codec aparece como **H.264 4:4:4 GPU: …**.
+* **Lista:** as suas máquinas (admins veem todas), atualizada a cada 3 s, online primeiro. Cada linha tem um ponto de estado (🟢 online, 🟡 em uso por outro técnico, ⚪ offline), o nome e, embaixo, o usuário logado no PC, o dono (para admins) e a versão do agente. **Buscar** filtra por nome, dono ou usuário. Dois cliques, **Enter** ou **Conectar** abrem uma janela por máquina.
+* **Rodapé:** a versão do visualizador e o que **este PC** decodifica (H.264, 4:4:4, AV1).
+* **Barra de telemetria** (embaixo da sessão): codec em uso (em ciano quando é **4:4:4**), decodificação na GPU ou CPU, resolução, **FPS desenhados aqui**, banda e RTT (verde até 60 ms, âmbar até 150 ms, rosa acima). À direita, em âmbar, o motivo quando a **Cor 4:4:4** está ligada mas não está em uso. Some em tela cheia; liga e desliga em **Exibir ▸ Barra de telemetria**.
 
 | Menu | O que faz |
 |---|---|
@@ -39,6 +40,7 @@ O login fica guardado (protegido pelo Windows, só para o seu usuário) em `%LOC
 | **Ações ▸ Enviar área de transferência** | põe o texto copiado aqui na área de transferência do PC remoto; cole lá com **Ctrl+V** |
 | **Ações ▸ Bloquear a tela remota** | como Win+L |
 | **Teclado ▸ Enviar Win, Alt+Tab…** | ligado: todas as teclas vão para o PC remoto; desligado: Win e Alt+Tab ficam no seu Windows |
+| **Ajuda ▸ Diagnóstico de vídeo** | versão, o que este PC decodifica, codecs pedidos ao agente, codec e encoder em uso no PC remoto, FPS desenhados e enviados, banda e RTT. Copie isso ao relatar um problema de imagem |
 
 > ⚠️ Com o **Teclado** ligado e a janela da sessão em primeiro plano, Alt+Tab **não** troca de janela no seu computador. Clique em outra janela, use a barra de tarefas ou desligue a opção.
 
@@ -46,9 +48,10 @@ O login fica guardado (protegido pelo Windows, só para o seu usuário) em `%LOC
 
 | Sintoma | O que fazer |
 |---|---|
-| Título sem "decodificação na GPU" | o Windows não ofereceu DXVA para esta placa: decodifica na CPU (funciona, gasta mais) |
+| Barra mostra "Decodifica CPU" | o Windows não ofereceu DXVA para esta placa: decodifica na CPU (funciona, gasta mais) |
+| FPS baixo e RTT alto (âmbar ou rosa) | é a rede até o relay: o agente já deixa mais quadros a caminho quando o RTT sobe (até 8), mas o atraso em si só cai com um relay mais perto ([FLUXOS](FLUXOS.md#fluxo)) |
 | Imagem em JPEG (título mostra "JPEG") | o decodificador H.264 do Windows não abriu (ex.: Windows N sem o *Media Feature Pack*) |
-| Título mostra "H.264", não "H.264 4:4:4" | preset com resolução reduzida, **Cor 4:4:4** desligada, ou o PC remoto não tem encoder de GPU (ou não abriu o segundo): o motivo fica no `agent.log` do PC remoto |
+| Barra mostra "H.264", não "H.264 4:4:4" (o motivo aparece à direita) | preset com resolução reduzida, **Cor 4:4:4** desligada, ou o PC remoto não tem encoder de GPU (ou não abriu o segundo): o motivo fica no `agent.log` do PC remoto |
 | Nunca usa AV1 | normal na maioria dos PCs: precisa de encoder AV1 na placa do PC remoto **e** da *Extensão de Vídeo AV1* (Microsoft Store) neste Windows |
 | "Sua sessão expirou" | entre de novo; a sessão do relay dura 12 h |
 | Tecla presa no PC remoto | troque de janela e volte: o visualizador solta todas as teclas ao perder o foco |
@@ -56,6 +59,6 @@ O login fica guardado (protegido pelo Windows, só para o seu usuário) em `%LOC
 
 ## 🔬 Por dentro
 
-* Código: [`cmd/viewer`](../cmd/viewer), [`internal/viewer/client`](../internal/viewer/client) (API, protocolo e lista de codecs, testado no Linux), [`internal/viewer/decode`](../internal/viewer/decode) (H.264, AVC444 e AV1 via Media Foundation, `rcdec.h`; recomposição 4:4:4 em `yuv.h`), [`internal/viewer/win`](../internal/viewer/win) (Win32).
+* Código: [`cmd/viewer`](../cmd/viewer), [`internal/viewer/client`](../internal/viewer/client) (API, protocolo e lista de codecs, testado no Linux), [`internal/viewer/ui`](../internal/viewer/ui) (o que as janelas mostram: linhas da lista, barra de telemetria, aviso do 4:4:4, mensagens de erro e diagnóstico; testado no Linux), [`internal/viewer/decode`](../internal/viewer/decode) (H.264, AVC444 e AV1 via Media Foundation, `rcdec.h`; recomposição 4:4:4 em `yuv.h`), [`internal/viewer/win`](../internal/viewer/win) (Win32).
 * **Como chega o 4:4:4:** o agente manda duas imagens H.264 comuns por quadro (a principal e a auxiliar, que leva a cor que a principal descarta). O visualizador decodifica as duas com o Media Foundation e junta a cor pixel a pixel. Se o decodificador falhar três vezes seguidas, o visualizador desiste do codec e o agente troca para o próximo da lista.
 * Decisões: [ADR 0012](adr/0012-visualizador-nativo.md) (o visualizador) e [ADR 0013](adr/0013-codecs-e-negociacao.md) (codecs e 4:4:4).

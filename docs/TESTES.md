@@ -36,6 +36,7 @@ possível as dependências são reais (banco, relay, WebSocket, agente). Motivo:
 | `relay/mail` | Validação da configuração SMTP |
 | `protocol` (teclas) | toda tecla que o agente injeta volta ao mesmo nome no visualizador (`KeyToVK` ↔ `CodeForVK`) |
 | `viewer/decode` | JPEG e PNG viram BGRA com as cores certas; **a recomposição 4:4:4 em C (`yuv.h`) bate byte a byte com a referência em Go**; o AVC444 guarda a última visão de cada fluxo e usa só a principal enquanto a auxiliar não chega |
+| `viewer/ui` | lista do visualizador (online primeiro, busca por nome/dono/usuário, dono só para admin), contagem, segmentos e cores da telemetria, motivo do 4:4:4 inativo, erros de login legíveis (DNS, certificado, sem resposta, senha) e o diagnóstico |
 | `viewer/client` | ordem dos codecs do hello (4:4:4 só com H.264); o hello mantém o campo `h264` para agentes antigos |
 | `agent/media/gpu` | AV1: o cabeçalho de sequência entra depois do delimitador temporal e nunca em dobro; extração do `av1C`; OBUs com extensão e tamanho longo |
 | `agent/media` | Bitrate adaptativo; controle de fluxo (limite em trânsito, quadro lento, ACK perdido, ACK falso; **a janela cresce com o RTT** e ainda para quando um quadro fica velho demais); **a captura troca de thread quando o desktop não pode ser seguido e volta a transmitir** (`TestStreamRecoversWhenDesktopCanBeFollowedAgain`); **negociação de codecs**: segue a ordem do técnico, pula o 4:4:4 com resolução reduzida, cai para o próximo quando um encoder não abre ou quebra no meio, e troca com um hello novo (`codec_test.go`) |
@@ -109,7 +110,9 @@ Ele cobre a matemática dos shaders, não o desenho direto nos planos NV12 nem o
 
 **🖥️ Visualizador do técnico (`remoteit-tecnico.exe`)**
 
-- [ ] Login, e a sessão continua ao fechar e abrir o programa (DPAPI)
+- [ ] Login, e a sessão continua ao fechar e abrir o programa (DPAPI); senha errada mostra "Usuário ou senha inválidos."
+- [ ] Lista com ponto de estado e versão; **Buscar** filtra; Enter conecta; rodapé mostra "H.264 sim · 4:4:4 sim" (e AV1 se a extensão estiver instalada)
+- [ ] Barra de telemetria com FPS e RTT coloridos; **Ajuda ▸ Diagnóstico de vídeo** mostra codec e encoder do PC remoto
 - [ ] Título mostra "decodificação na GPU" numa máquina com placa de vídeo
 - [ ] Win, Win+R, Alt+Tab e Ctrl+Esc chegam ao PC remoto com a janela em primeiro plano; com **Teclado** desligado, ficam no PC local
 - [ ] Teclas mortas: ´ + a vira "á" no PC remoto (teclado ABNT2)

@@ -5,7 +5,6 @@ package win
 import (
 	"context"
 	"errors"
-	"fmt"
 	"runtime"
 	"sync"
 	"sync/atomic"
@@ -16,6 +15,7 @@ import (
 	"remoteit/internal/protocol"
 	"remoteit/internal/viewer/client"
 	"remoteit/internal/viewer/decode"
+	"remoteit/internal/viewer/ui"
 )
 
 // Mensagens próprias da janela de sessão (vindas das goroutines).
@@ -24,7 +24,11 @@ const (
 	wmTitle  = wmApp + 11 // estatísticas novas no título
 	wmStatus = wmApp + 12 // status novo (aguardando, protegida, encerrada)
 	wmCursor = wmApp + 13 // formato do cursor mudou
+	wmStats  = wmApp + 14 // telemetria nova para a barra
 )
+
+// barH é a altura da barra de telemetria, em pixels lógicos.
+const barH = 32
 
 // Itens de menu da sessão.
 const (
@@ -32,6 +36,8 @@ const (
 	idColor444     = 1010
 	idActualSize   = 1101
 	idFullscreen   = 1102
+	idBar          = 1103
+	idDiag         = 1401
 	idCtrlShiftEsc = 1201
 	idLock         = 1202
 	idClipboard    = 1203
@@ -62,6 +68,7 @@ type sessionWin struct {
 
 	actualSize bool
 	color444   bool // oferecer cor 4:4:4 ao agente (menu Qualidade)
+	showBar    bool // barra de telemetria (menu Exibir)
 	full       bool
 	saved      rect
 	savedStyle uintptr
@@ -80,11 +87,15 @@ type sessionWin struct {
 	frame  *decode.Frame
 	status string
 	title  string
+	stats  protocol.Stats // último stats do agente
+	drawn  int            // quadros desenhados no último segundo
+	gpu    bool           // decodificação na GPU
+	hasSt  bool
 	cursor string
 }
 
 func (a *App) openSession(m client.Machine) {
-	w := &sessionWin{app: a, machine: m, preset: "quality", capture: true, color444: true, keys: newKeyTranslator(),
+	w := &sessionWin{app: a, machine: m, preset: "quality", capture: true, color444: true, showBar: true, keys: newKeyTranslator(),
 		broken: map[string]bool{},
 		out:    make(chan func(*client.Session), 256), status: "Conectando…"}
 	w.title = "RemoteIT — " + m.Name
@@ -113,6 +124,7 @@ func (w *sessionWin) buildMenu() {
 	v, _, _ := pCreatePopupMenu.Call()
 	pAppendMenuW.Call(v, mfString, idActualSize, uintptr(unsafe.Pointer(utf16("Tamanho real (1:1)"))))
 	pAppendMenuW.Call(v, mfString, idFullscreen, uintptr(unsafe.Pointer(utf16("Tela cheia\tCtrl+Alt+F"))))
+	pAppendMenuW.Call(v, mfString, idBar, uintptr(unsafe.Pointer(utf16("Barra de telemetria"))))
 	ac, _, _ := pCreatePopupMenu.Call()
 	pAppendMenuW.Call(ac, mfString, idCtrlShiftEsc, uintptr(unsafe.Pointer(utf16("Enviar Ctrl+Shift+Esc (Gerenciador de Tarefas)"))))
 	pAppendMenuW.Call(ac, mfString, idClipboard, uintptr(unsafe.Pointer(utf16("Enviar área de transferência (cole com Ctrl+V lá)"))))
@@ -124,6 +136,9 @@ func (w *sessionWin) buildMenu() {
 	pAppendMenuW.Call(bar, mfPopup, v, uintptr(unsafe.Pointer(utf16("&Exibir"))))
 	pAppendMenuW.Call(bar, mfPopup, ac, uintptr(unsafe.Pointer(utf16("&Ações"))))
 	pAppendMenuW.Call(bar, mfPopup, k, uintptr(unsafe.Pointer(utf16("&Teclado"))))
+	h, _, _ := pCreatePopupMenu.Call()
+	pAppendMenuW.Call(h, mfString, idDiag, uintptr(unsafe.Pointer(utf16("Diagnóstico de vídeo…"))))
+	pAppendMenuW.Call(bar, mfPopup, h, uintptr(unsafe.Pointer(utf16("Aj&uda"))))
 	pSetMenu.Call(uintptr(w.hwnd), bar)
 	w.menu = bar
 	w.syncMenu()
@@ -144,6 +159,7 @@ func (w *sessionWin) syncMenu() {
 	}
 	check(idActualSize, w.actualSize)
 	check(idColor444, w.color444)
+	check(idBar, w.showBar)
 	check(idCapture, w.capture)
 	pDrawMenuBar.Call(uintptr(w.hwnd))
 }
@@ -259,10 +275,11 @@ func (w *sessionWin) resendCodecs() {
 
 // sessionHandler decodifica os quadros na goroutine de [sessionWin.run].
 type sessionHandler struct {
-	w    *sessionWin
-	vids map[byte]decode.Video // um decodificador por codec, aberto no primeiro quadro
-	errs map[byte]int          // falhas seguidas por codec
-	last byte                  // codec do último quadro de vídeo
+	w     *sessionWin
+	vids  map[byte]decode.Video // um decodificador por codec, aberto no primeiro quadro
+	errs  map[byte]int          // falhas seguidas por codec
+	last  byte                  // codec do último quadro de vídeo
+	drawn int                   // quadros de vídeo prontos desde o último stats
 }
 
 // codecNames liga o código do quadro ao nome do hello e ao construtor.
@@ -329,6 +346,9 @@ func (h *sessionHandler) Frame(hd protocol.FrameHeader, payload []byte) {
 	if f == nil || err != nil {
 		return
 	}
+	if hd.Codec != protocol.CodecPNG {
+		h.drawn++ // o refresh de nitidez não é quadro de vídeo
+	}
 	h.w.mu.Lock()
 	h.w.frame = f
 	h.w.mu.Unlock()
@@ -348,16 +368,20 @@ func (h *sessionHandler) Status(t string) {
 }
 
 func (h *sessionHandler) Stats(st protocol.Stats) {
-	gpu := ""
-	if v := h.vids[h.last]; v != nil && v.GPU() && st.Encoder != "" {
-		gpu = " · decodificação na GPU"
+	v := h.vids[h.last]
+	codec, _ := ui.Codec(st.Encoder)
+	t := "RemoteIT — " + h.w.machine.Name
+	if codec != "" {
+		t += " · " + codec
 	}
-	t := fmt.Sprintf("RemoteIT — %s · %s · %dx%d · %d fps · %.1f Mbps · RTT %d ms%s",
-		h.w.machine.Name, st.Encoder, st.W, st.H, st.FPS, float64(st.Kbps)/1000, st.RTTms, gpu)
 	h.w.mu.Lock()
 	h.w.title = t
+	h.w.stats, h.w.drawn, h.w.hasSt = st, h.drawn, true
+	h.w.gpu = v != nil && v.GPU()
 	h.w.mu.Unlock()
+	h.drawn = 0
 	post(h.w.hwnd, wmTitle)
+	post(h.w.hwnd, wmStats)
 }
 
 func (h *sessionHandler) Cursor(int, int, bool) {}
@@ -413,11 +437,24 @@ func (w *sessionWin) proc(hwnd windows.HWND, m uint32, wp, lp uintptr) (uintptr,
 			pSetCursor.Call(c)
 			return 1, true
 		}
+	case wmStats:
+		var rc rect
+		pGetClientRect.Call(uintptr(hwnd), uintptr(unsafe.Pointer(&rc)))
+		if b := w.barRect(rc); b.h() > 0 {
+			pInvalidateRect.Call(uintptr(hwnd), uintptr(unsafe.Pointer(&b)), 0)
+		}
+		return 0, true
 	case wmMouseMove:
+		if w.overBar(lp) {
+			return 0, true // a barra é daqui: não move o mouse remoto
+		}
 		x, y := w.norm(lp)
 		w.send(func(s *client.Session) { s.MouseMove(x, y) })
 		return 0, true
 	case wmLButtonDown, wmRButtonDown, wmMButtonDown, wmLButtonUp, wmRButtonUp, wmMButtonUp:
+		if w.overBar(lp) && (m == wmLButtonDown || m == wmRButtonDown || m == wmMButtonDown) {
+			return 0, true
+		}
 		w.mouseButton(m, lp)
 		return 0, true
 	case wmMouseWheel:
@@ -460,6 +497,14 @@ func (w *sessionWin) command(id int32) {
 		w.color444 = !w.color444
 		w.mu.Unlock()
 		w.resendCodecs()
+	case id == idBar:
+		w.showBar = !w.showBar
+		pInvalidateRect.Call(uintptr(w.hwnd), 0, 0)
+	case id == idDiag:
+		w.mu.Lock()
+		text := ui.Diagnostics(w.app.opts.Version, w.can.h264, w.can.av1, w.codecsLocked(), w.stats, w.drawn, w.preset)
+		w.mu.Unlock()
+		infoBox(w.hwnd, "Diagnóstico de vídeo — "+w.machine.Name, text)
 	case id == idActualSize:
 		w.actualSize = !w.actualSize
 		pInvalidateRect.Call(uintptr(w.hwnd), 0, 0)
@@ -490,12 +535,26 @@ func (w *sessionWin) command(id int32) {
 	w.syncMenu()
 }
 
+// barRect é onde fica a barra de telemetria (vazio se escondida ou em tela cheia).
+func (w *sessionWin) barRect(rc rect) rect {
+	if !w.showBar || w.full {
+		return rect{}
+	}
+	return rect{rc.Left, rc.Bottom - w.app.px(barH), rc.Right, rc.Bottom}
+}
+
 func (w *sessionWin) paint() {
 	var ps paintStruct
 	hdc, _, _ := pBeginPaint.Call(uintptr(w.hwnd), uintptr(unsafe.Pointer(&ps)))
 	defer pEndPaint.Call(uintptr(w.hwnd), uintptr(unsafe.Pointer(&ps)))
-	var rc rect
-	pGetClientRect.Call(uintptr(w.hwnd), uintptr(unsafe.Pointer(&rc)))
+	var full rect
+	pGetClientRect.Call(uintptr(w.hwnd), uintptr(unsafe.Pointer(&full)))
+	bar := w.barRect(full)
+	rc := full
+	if bar.h() > 0 {
+		rc.Bottom = bar.Top
+		w.paintBar(hdc, bar)
+	}
 
 	w.mu.Lock()
 	f, status := w.frame, w.status
@@ -505,7 +564,7 @@ func (w *sessionWin) paint() {
 	if f == nil {
 		pFillRect.Call(hdc, uintptr(unsafe.Pointer(&rc)), bg)
 		w.dest = rect{}
-		w.drawText(hdc, rc, status)
+		w.drawCard(hdc, rc, status)
 		return
 	}
 
@@ -527,9 +586,14 @@ func (w *sessionWin) paint() {
 
 	// bordas pintadas à parte: o vídeo não pisca ao redimensionar
 	for _, b := range []rect{{0, 0, rc.Right, dy}, {0, dy + dh, rc.Right, rc.Bottom}, {0, dy, dx, dy + dh}, {dx + dw, dy, rc.Right, dy + dh}} {
+		b.Bottom = min(b.Bottom, rc.Bottom)
 		if b.w() > 0 && b.h() > 0 {
 			pFillRect.Call(hdc, uintptr(unsafe.Pointer(&b)), bg)
 		}
+	}
+	// o vídeo não pinta por cima da barra (tamanho real maior que a janela)
+	if bar.h() > 0 {
+		pIntersectClipRect.Call(hdc, uintptr(rc.Left), uintptr(rc.Top), uintptr(rc.Right), uintptr(rc.Bottom))
 	}
 	mode := uintptr(3) // COLORONCOLOR: 1:1, sem custo
 	if dw != int32(f.W) {
@@ -541,17 +605,67 @@ func (w *sessionWin) paint() {
 	pStretchDIBits.Call(hdc, uintptr(dx), uintptr(dy), uintptr(dw), uintptr(dh), 0, 0, uintptr(f.W), uintptr(f.H),
 		uintptr(unsafe.Pointer(&f.BGRA[0])), uintptr(unsafe.Pointer(&bmi)), dibRGB, srcCopy)
 	if status != "" {
-		band := rect{0, 0, rc.Right, 36}
-		pFillRect.Call(hdc, uintptr(unsafe.Pointer(&band)), w.app.panelBrush)
-		w.drawText(hdc, band, status)
+		w.drawCard(hdc, rc, status)
 	}
 }
 
-func (w *sessionWin) drawText(hdc uintptr, r rect, s string) {
-	pSelectObject.Call(hdc, w.app.font)
-	pSetBkMode.Call(hdc, transparent)
-	pSetTextColor.Call(hdc, colorText)
-	pDrawTextW.Call(hdc, uintptr(unsafe.Pointer(utf16(s))), ^uintptr(0), uintptr(unsafe.Pointer(&r)), dtCenter|dtVCenter|dtSingleLine)
+// drawCard mostra um aviso (aguardando, tela protegida, conexão encerrada)
+// num cartão no centro da área de vídeo.
+func (w *sessionWin) drawCard(hdc uintptr, area rect, text string) {
+	if text == "" {
+		return
+	}
+	px := w.app.px
+	cw := min(textWidth(hdc, text, w.app.font)+px(48), area.w()-px(32))
+	ch := px(56)
+	x, y := area.Left+(area.w()-cw)/2, area.Top+(area.h()-ch)/2
+	card := rect{x, y, x + cw, y + ch}
+	fillRect(hdc, card, colorPanel)
+	frame(hdc, card, colorLine)
+	fillRect(hdc, rect{card.Left, card.Top, card.Left + px(3), card.Bottom}, colorAccent)
+	drawString(hdc, card, text, w.app.font, colorText, dtCenter)
+}
+
+// paintBar desenha a barra de telemetria: os segmentos de ui.Telemetry e, à
+// direita, por que o 4:4:4 pedido não está em uso.
+func (w *sessionWin) paintBar(hdc uintptr, bar rect) {
+	px := w.app.px
+	fillRect(hdc, bar, colorPanel)
+	fillRect(hdc, rect{bar.Left, bar.Top, bar.Right, bar.Top + 1}, colorLine)
+	w.mu.Lock()
+	st, drawn, gpu, has := w.stats, w.drawn, w.gpu, w.hasSt
+	hint := ui.ColorHint(w.color444, w.can.h264, w.broken[protocol.CodecNameAVC444], w.preset, st.Encoder)
+	w.mu.Unlock()
+	x := bar.Left + px(14)
+	if !has {
+		drawString(hdc, rect{x, bar.Top, bar.Right, bar.Bottom}, "aguardando vídeo…", w.app.fontSmall, colorMuted, dtLeft)
+		return
+	}
+	right := bar.Right - px(14)
+	if hint != "" {
+		hw := textWidth(hdc, hint, w.app.fontSmall)
+		drawString(hdc, rect{right - hw, bar.Top, right, bar.Bottom}, hint, w.app.fontSmall, colorWarn, dtRight)
+		right -= hw + px(20)
+	}
+	for _, sg := range ui.Telemetry(st, drawn, gpu) {
+		lw := textWidth(hdc, sg.Label, w.app.fontSmall)
+		vw := textWidth(hdc, sg.Value, w.app.fontMono)
+		if x+lw+px(6)+vw > right {
+			break // janela estreita: mostra o que couber
+		}
+		drawString(hdc, rect{x, bar.Top, x + lw, bar.Bottom}, sg.Label, w.app.fontSmall, colorMuted, dtLeft)
+		x += lw + px(6)
+		drawString(hdc, rect{x, bar.Top, x + vw, bar.Bottom}, sg.Value, w.app.fontMono, levelColor(sg.Level), dtLeft)
+		x += vw + px(18)
+	}
+}
+
+// overBar informa se o ponto lp (coordenadas do cliente) está na barra.
+func (w *sessionWin) overBar(lp uintptr) bool {
+	var rc rect
+	pGetClientRect.Call(uintptr(w.hwnd), uintptr(unsafe.Pointer(&rc)))
+	b := w.barRect(rc)
+	return b.h() > 0 && hiword(lp) >= b.Top
 }
 
 // norm converte a posição do mouse na janela em [0,1] da tela remota.
