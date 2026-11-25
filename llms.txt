@@ -15,7 +15,7 @@ em `internal/`.
 - **hub**: agentes online em memória; 1 técnico por agente; um técnico novo assume a sessão.
 - **identity / audit**: usuários, papéis, sessões; todo acesso é auditado, e sem auditoria não há acesso.
 - **contas**: `identity.Accounts` + `relay/mail`; conta nova fica pendente até um admin aprovar (ADR 0006).
-- **session / media**: no agente, consentimento antes de vídeo e input; controle de fluxo com no máximo 2 quadros sem ACK.
+- **session / media**: no agente, consentimento antes de vídeo e input; controle de fluxo com 2 a 8 quadros sem ACK, conforme o RTT (media/flow.go).
 - **storage/postgres**: único pacote com SQL; migrations em `migrations/*.sql`.
 - **update**: agente e visualizador se atualizam sozinhos; build.sh assina dist/update.json com chave Ed25519 do projeto (cmd/signupdate), o cliente confere assinatura e hash (ADR 0011).
 - **viewer**: visualizador nativo do técnico para Windows (cmd/viewer, internal/viewer/{client,decode,win}); mesmo protocolo do console, H.264/AVC444 (cor 4:4:4)/AV1 via Media Foundation, hook de teclado, mensagem `clip` (ADR 0012, 0013).

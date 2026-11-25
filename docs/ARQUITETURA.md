@@ -48,7 +48,7 @@ Um único binário Go serve **a API** (`/api/...`), **os dois WebSockets** (`/ws
 | 📜 Auditoria | `internal/relay/audit` | registro de acessos | sem registro, sem acesso; acessos órfãos de um reinício são encerrados na partida |
 | 🖥️ Máquinas | `internal/relay/machines` | dono, credencial e códigos de cadastro | dono = quem gerou o código; acessam só o dono e os admins (sem compartilhamento); removida = credencial revogada; legado só para admins |
 | 🎬 Sessão remota | `internal/agent/session` | ciclo de uma transmissão no agente | nada de vídeo, entrada ou bloqueio antes do consentimento |
-| 🎞️ Mídia | `internal/agent/media` (+ `capture`, `jpeg`, `gpu`) | captura, encoder, negociação de codec, controle de fluxo, bitrate | máx. 2 quadros em trânsito; codec pela lista do técnico, com fallback até JPEG; thread de captura descartável |
+| 🎞️ Mídia | `internal/agent/media` (+ `capture`, `jpeg`, `gpu`) | captura, encoder, negociação de codec, controle de fluxo, bitrate | de 2 a 8 quadros em trânsito, conforme o RTT; codec pela lista do técnico, com fallback até JPEG; thread de captura descartável |
 | ⌨️ Entrada remota | `internal/agent/input` | mouse e teclado | imprimíveis como Unicode; nunca descarta tecla nem clique |
 | 🪟 Desktop | `internal/agent/desktop` | seguir o desktop que recebe entrada | handle por thread do SO |
 | 🔒 Bloqueio | `internal/agent/lock` | bloquear a estação | só a API oficial (`LockWorkStation`) |

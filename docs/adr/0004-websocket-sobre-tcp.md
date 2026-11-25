@@ -20,3 +20,11 @@ e um servidor TURN a mais para operar).
 - Negativo: perda de pacote no TCP atrasa os quadros seguintes (head-of-line blocking). O controle de
   fluxo limita o atraso, mas não o elimina. Se UDP estiver disponível em algum cenário, WebRTC volta
   a ser candidato.
+
+## Revisão 25/11/2026
+
+Com o relay atrás de um Cloudflare Tunnel numa internet doméstica, o RTT de um quadro chega a ~140 ms,
+e "menos de 2 sem ACK" limitava a transmissão a ~14 fps. A janela agora acompanha o **menor** RTT
+visto: os quadros que cabem nele, mais um, de 2 a 8 (`media.FlowControl.Window`). A proteção contra
+fila continua: um quadro sem ACK há mais de 3× o menor RTT segura o envio. O técnico confirma cada
+quadro assim que ele chega, antes de decodificar, para o RTT medir só a rede.

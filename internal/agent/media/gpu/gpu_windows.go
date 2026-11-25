@@ -3,7 +3,7 @@
 package gpu
 
 /*
-#cgo LDFLAGS: -ld3d11 -ldxgi -lmfuuid -lole32 -loleaut32 -luuid -lgdi32 -luser32
+#cgo LDFLAGS: -ld3d11 -ldxgi -lmfuuid -lole32 -loleaut32 -luuid -lgdi32 -luser32 -lwinmm
 #include "rcenc.h"
 */
 import "C"

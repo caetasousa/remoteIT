@@ -39,7 +39,7 @@ Todas têm o campo `t` com o tipo. Campos com valor zero são omitidos.
 | `hello` | `codecs: [..]`, `h264: bool` | o que o técnico decodifica, **em ordem de preferência** (`avc444`, `av1`, `h264`, `jpeg`; veja [abaixo](#codecs)). `h264` é para agentes de antes da negociação. Sem `hello` em 1,5 s, o agente assume JPEG. Um `hello` novo troca de codec sem reconectar |
 | `cfg` | `p: turbo \| balanced \| quality \| quality60` | preset de qualidade ([tabela](FLUXOS.md#video)) |
 | `kf` | | pede keyframe (decoder reiniciado); descarta os quadros em trânsito |
-| `ack` | `s: uint32` | quadro `s` recebido; libera o controle de fluxo |
+| `ack` | `s: uint32` | quadro `s` recebido (mande assim que chegar, antes de decodificar); libera o controle de fluxo |
 | `mm` | `x, y` em [0,1] | mouse move, relativo à tela remota |
 | `md` / `mu` | `x, y, b` (0 esq., 1 meio, 2 dir.) | botão pressionado / solto |
 | `wh` | `d` (múltiplos de 120) | roda do mouse |
@@ -158,7 +158,7 @@ sequenceDiagram
     A->>T: [quadro seq=1, keyframe]
     A->>T: {"t":"cur","x":640,"y":360,"v":true}
     T->>A: {"t":"ack","s":1}
-    Note over A,T: no máximo 2 quadros sem ack em trânsito
+    Note over A,T: de 2 a 8 quadros sem ack em trânsito, conforme o RTT
     A->>T: {"t":"stats",...} (1x/s)
     T->>A: {"t":"lock"}
     A->>T: {"t":"secure"} → quadros da tela de bloqueio (modo serviço)

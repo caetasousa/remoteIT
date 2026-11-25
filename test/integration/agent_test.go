@@ -64,7 +64,8 @@ func TestConsentDenied(t *testing.T) {
 	}
 }
 
-// O controle de fluxo não deixa mais que MaxInflight quadros sem ACK.
+// O controle de fluxo não deixa mais que MinInflight quadros sem ACK enquanto
+// nenhum RTT foi medido (sem ACK, a janela não cresce).
 func TestFlowControlWithoutAcks(t *testing.T) {
 	e := newEnv(t)
 	e.realAgent("pc1", consent.Always, &recordingInjector{})
@@ -103,8 +104,8 @@ collect:
 			break collect
 		}
 	}
-	if frames == 0 || frames > media.MaxInflight {
-		t.Fatalf("sem ACK chegaram %d quadros, want 1..%d", frames, media.MaxInflight)
+	if frames == 0 || frames > media.MinInflight {
+		t.Fatalf("sem ACK chegaram %d quadros, want 1..%d", frames, media.MinInflight)
 	}
 
 	sendJSON(t, v, protocol.Message{T: protocol.TypeAck, S: last})

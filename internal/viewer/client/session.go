@@ -18,9 +18,11 @@ import (
 // Handler recebe o que chega do agente. Os métodos são chamados em ordem,
 // de uma goroutine só (a de [Session.Run]).
 type Handler interface {
-	// Frame recebe um quadro (H.264, AVC444, AV1, JPEG ou PNG). O ack é enviado quando
-	// Frame retorna: decodifique e desenhe antes de retornar, como o
-	// navegador faz, para o controle de fluxo medir o caminho inteiro.
+	// Frame recebe um quadro (H.264, AVC444, AV1, JPEG ou PNG). O ack já
+	// saiu quando Frame é chamado, como no navegador: o tempo de decodificar
+	// não entra no RTT, que limita os quadros por segundo. Decodificar aqui
+	// mesmo segura a leitura do próximo quadro, então os acks seguintes
+	// esperam e o agente não manda mais do que este PC dá conta.
 	Frame(h protocol.FrameHeader, payload []byte)
 	// Status recebe waiting, granted, denied e secure.
 	Status(t string)
@@ -121,8 +123,8 @@ func (s *Session) Run(ctx context.Context, h Handler) error {
 			if err != nil {
 				continue
 			}
-			h.Frame(hdr, payload)
 			s.send(protocol.Message{T: protocol.TypeAck, S: hdr.Seq})
+			h.Frame(hdr, payload)
 			continue
 		}
 		var m protocol.Message

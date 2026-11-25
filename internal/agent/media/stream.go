@@ -202,6 +202,7 @@ func (s *Stream) capture(ctx context.Context) bool {
 			}
 			s.logger.Info("captura aberta", "encoder", src.Name())
 			interval = time.Second / time.Duration(p.FPS)
+			s.flow.SetInterval(interval)
 			refine = 0
 			s.RequestKeyframe()
 		}

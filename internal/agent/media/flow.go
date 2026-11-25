@@ -5,9 +5,18 @@ import (
 	"time"
 )
 
-// MaxInflight é o máximo de quadros enviados e ainda não confirmados. Em LAN,
-// 2 bastam; menos quadros em trânsito significa menos latência percebida.
-const MaxInflight = 2
+// Quadros enviados e ainda não confirmados. Com no máximo N a caminho, a
+// transmissão não passa de N/RTT quadros por segundo: com 2 e 140 ms de RTT
+// (relay atrás de um túnel numa internet doméstica), seriam ~14 fps. Por isso
+// a janela cresce com o RTT, de MinInflight até MaxInflight (veja
+// [FlowControl.Window]). Mais quadros a caminho não aumentam o atraso enquanto
+// a banda dá conta: eles só deixam de esperar a confirmação do anterior.
+// Quando a banda não dá conta, a fila aparece como quadro velho sem ACK, e
+// [FlowControl.Congested] segura o envio.
+const (
+	MinInflight = 2 // em LAN, e enquanto o RTT ainda não foi medido
+	MaxInflight = 8 // ~57 fps com 140 ms de RTT
+)
 
 // lostAckAfter é quanto tempo sem ACK faz o agente supor que o ACK se perdeu
 // e destravar o envio.
@@ -21,11 +30,12 @@ const lostAckAfter = 3 * time.Second
 // OnAck e DropInflight são chamados pela goroutine de leitura; os demais
 // métodos, pelo loop de stream. Por isso o estado é atômico.
 type FlowControl struct {
-	seq    atomic.Uint32
-	acked  atomic.Uint32
-	rtt    atomic.Int64
-	minRTT atomic.Int64
-	sentAt [256]atomic.Int64
+	seq      atomic.Uint32
+	acked    atomic.Uint32
+	rtt      atomic.Int64
+	minRTT   atomic.Int64
+	interval atomic.Int64 // intervalo entre quadros do preset (veja SetInterval)
+	sentAt   [256]atomic.Int64
 }
 
 // Sent registra o envio de um novo quadro em at e devolve seu número de
@@ -77,10 +87,26 @@ func (f *FlowControl) Congested(now time.Time) bool {
 	case oldest > lostAckAfter:
 		f.acked.Store(sent)
 		return false
-	case inflight >= MaxInflight || oldest > limit:
+	case inflight >= f.Window() || oldest > limit:
 		return true
 	}
 	return false
+}
+
+// SetInterval informa o intervalo entre quadros do preset atual (1/FPS), que
+// define quantos quadros cabem num RTT.
+func (f *FlowControl) SetInterval(d time.Duration) { f.interval.Store(int64(d)) }
+
+// Window é quantos quadros podem estar a caminho: os que cabem no menor RTT
+// visto, mais um, entre MinInflight e MaxInflight. Usa o menor RTT, não o
+// último, para a própria fila não aumentar a janela.
+func (f *FlowControl) Window() uint32 {
+	rtt, iv := f.minRTT.Load(), f.interval.Load()
+	if rtt <= 0 || iv <= 0 {
+		return MinInflight
+	}
+	n := uint32((rtt+iv-1)/iv) + 1
+	return min(max(n, MinInflight), MaxInflight)
 }
 
 // RTT devolve o tempo de ida e volta do último quadro confirmado.

@@ -253,11 +253,11 @@ graph LR
 <a id="fluxo"></a>
 ## 5️⃣ Controle de fluxo e bitrate
 
-> 🗣️ **Em palavras simples:** se o agente mandasse quadros mais rápido do que a internet aguenta, eles ficariam numa fila, e o técnico veria a tela de segundos atrás. Por isso o navegador **confirma** cada quadro que recebe, e o agente nunca deixa mais de **dois** sem confirmação no caminho. Quando a rede aperta, ele baixa a qualidade; quando folga, sobe de novo, aos poucos.
+> 🗣️ **Em palavras simples:** se o agente mandasse quadros mais rápido do que a internet aguenta, eles ficariam numa fila, e o técnico veria a tela de segundos atrás. Por isso o técnico **confirma** cada quadro que recebe, e o agente só deixa alguns sem confirmação no caminho: **dois** numa rede local e até **oito** quando a internet é lenta (senão, com 140 ms de ida e volta, não passaria de ~14 quadros por segundo). Quando a rede aperta, ele baixa a qualidade; quando folga, sobe de novo, aos poucos.
 
 ```mermaid
 flowchart TD
-    START(["⏱️ próximo quadro"]) --> Q{"2 quadros<br/>sem ack?"}
+    START(["⏱️ próximo quadro"]) --> Q{"janela cheia (2 a 8)<br/>ou quadro velho sem ack?"}
     Q -- sim --> W["espera 3 ms<br/>congested++"] --> START
     Q -- não --> N["Source.Next<br/>(espera até 1 quadro de tempo)"]
     N --> CH{"tela mudou?"}
@@ -275,7 +275,9 @@ flowchart TD
 
 | Regra | Valor | Onde |
 |---|---|---|
-| Quadros em trânsito | no máximo 2 | [`media/flow.go`](../internal/agent/media/flow.go) |
+| Quadros em trânsito | a janela: os quadros que cabem no menor RTT visto, mais um, entre 2 e 8. Com 60 fps: 2 em LAN, 5 com 50 ms, 8 com 140 ms (~57 fps). Usa o **menor** RTT para a própria fila não aumentar a janela | [`media/flow.go`](../internal/agent/media/flow.go) (`Window`, `TestFlowControlWindowFollowsRTT`) |
+| Quadro velho sem ack | se o mais antigo passa de 3× o menor RTT (mínimo 50 ms), espera mesmo com vaga na janela: é fila se formando na rede | `TestFlowControlWideWindowStillStopsOnQueue` |
+| Quando o técnico confirma | assim que o quadro chega, antes de decodificar (navegador e visualizador): o tempo de decodificar não entra no RTT | `session.ts`, `viewer/client` |
 | Ack perdido | depois de 3 s sem ack, o agente supõe que ele se perdeu e libera a vaga | `flow.go` (teste `TestFlowControlLostAck`) |
 | Ack falso ou repetido | ignorado | `TestFlowControlIgnoresBogusAcks` |
 | Queda de bitrate | −25% por segundo congestionado (≥ `CongestedThreshold` = 10 esperas de 3 ms) | `media.NextBitrate` |

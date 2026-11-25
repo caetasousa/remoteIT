@@ -87,6 +87,12 @@ O formato segue o [Keep a Changelog](https://keepachangelog.com/pt-BR/1.1.0/) e 
 
 ### Fixed
 
+- **Poucos quadros por segundo com internet lenta** (~14 fps com 140 ms de RTT): o agente deixava só
+  2 quadros sem confirmação a caminho; agora a janela acompanha o RTT, de 2 a 8. O visualizador
+  nativo confirma o quadro ao recebê-lo, antes de decodificar, como o navegador já fazia.
+- O encoder de GPU esperava a saída com `Sleep(1)`, que no Windows dura ~15,6 ms sem
+  `timeBeginPeriod`: duas a quatro esperas por quadro seguravam o vídeo em 15-30 fps. Agora usa um
+  timer de alta resolução (~0,5 ms), e no 4:4:4 os dois encoders são esperados juntos.
 - Console num navegador sem H.264 por hardware (máquina virtual, por exemplo): o decodificador era
   configurado com `prefer-hardware`, que o Chromium recusa sem GPU, e a tela nunca aparecia. Agora a
   aceleração vem da sondagem (GPU se houver, senão software); e depois de três falhas o console pede

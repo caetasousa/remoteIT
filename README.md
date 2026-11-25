@@ -149,7 +149,7 @@ sequenceDiagram
     R->>R: grava o fim na auditoria
 ```
 
-* 🚦 **Controle de fluxo:** o navegador confirma cada quadro, e o agente nunca deixa mais de **2 quadros sem confirmação** no caminho. Isso evita fila nos buffers do TCP, a principal causa de atraso em acesso remoto. O bitrate cai 25% quando congestiona e sobe 10% por segundo quando a rede está livre.
+* 🚦 **Controle de fluxo:** o navegador confirma cada quadro, e o agente só deixa alguns quadros sem confirmação no caminho (**2** em rede local, até **8** com internet lenta, para não travar em poucos quadros por segundo). Isso evita fila nos buffers do TCP, a principal causa de atraso em acesso remoto. O bitrate cai 25% quando congestiona e sobe 10% por segundo quando a rede está livre.
 * 🔐 **Sem auditoria não há acesso:** se o banco falhar ao registrar o início, o relay recusa a conexão do técnico.
 * 🙋 **Consentimento:** por padrão o usuário do PC aprova cada acesso; o build com `NO_CONSENT=1` dispensa a pergunta (a auditoria continua).
 

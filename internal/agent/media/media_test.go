@@ -35,7 +35,7 @@ func TestFlowControlLimitsInflight(t *testing.T) {
 	s1 := f.Sent(t0)
 	f.Sent(t0)
 	if !f.Congested(t0.Add(time.Millisecond)) {
-		t.Fatal("com MaxInflight quadros sem ACK deveria esperar")
+		t.Fatal("com MinInflight quadros sem ACK e RTT desconhecido deveria esperar")
 	}
 	f.OnAck(s1, t0.Add(10*time.Millisecond))
 	if f.Congested(t0.Add(11 * time.Millisecond)) {
@@ -92,5 +92,50 @@ func TestDropInflight(t *testing.T) {
 	f.DropInflight()
 	if f.Congested(t0) {
 		t.Error("DropInflight deveria zerar os quadros em trânsito")
+	}
+}
+
+// A janela cresce com o RTT: com 140 ms e 60 fps, 2 quadros a caminho dariam
+// ~14 fps; a janela vai ao máximo. Em LAN fica no mínimo.
+func TestFlowControlWindowFollowsRTT(t *testing.T) {
+	cases := []struct {
+		rtt, interval time.Duration
+		want          uint32
+	}{
+		{0, 16 * time.Millisecond, MinInflight},                    // RTT ainda não medido
+		{2 * time.Millisecond, 16 * time.Millisecond, MinInflight}, // LAN
+		{50 * time.Millisecond, 16 * time.Millisecond, 5},          // 4 quadros cabem em 50 ms, mais 1
+		{140 * time.Millisecond, 16 * time.Millisecond, MaxInflight},
+		{140 * time.Millisecond, 0, MinInflight}, // sem preset ainda
+	}
+	for _, c := range cases {
+		var f FlowControl
+		t0 := time.Unix(1000, 0)
+		f.SetInterval(c.interval)
+		if c.rtt > 0 {
+			f.OnAck(f.Sent(t0), t0.Add(c.rtt))
+		}
+		if got := f.Window(); got != c.want {
+			t.Errorf("RTT %v, intervalo %v: janela %d, want %d", c.rtt, c.interval, got, c.want)
+		}
+	}
+}
+
+// Com RTT alto, a janela maior deixa passar mais quadros sem ACK, mas um
+// quadro velho demais (fila na rede) ainda segura o envio.
+func TestFlowControlWideWindowStillStopsOnQueue(t *testing.T) {
+	var f FlowControl
+	t0 := time.Unix(1000, 0)
+	f.SetInterval(16 * time.Millisecond)
+	f.OnAck(f.Sent(t0), t0.Add(140*time.Millisecond)) // menor RTT 140 ms
+	t1 := t0.Add(time.Second)
+	for i := range 5 {
+		f.Sent(t1.Add(time.Duration(i) * 16 * time.Millisecond))
+	}
+	if f.Congested(t1.Add(100 * time.Millisecond)) {
+		t.Fatal("5 quadros a caminho com janela 8 e o mais velho dentro do limite: deveria seguir")
+	}
+	if !f.Congested(t1.Add(500 * time.Millisecond)) {
+		t.Fatal("quadro sem ACK há mais de 3x o menor RTT: deveria esperar")
 	}
 }

@@ -23,6 +23,7 @@
 #include <mferror.h>
 #include <codecapi.h>
 #include <wmcodecdsp.h>
+#include <mmsystem.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -162,10 +163,30 @@ typedef struct rc_ctx {
 	LARGE_INTEGER qpf, t0;
 	char name[200];
 	int com, mfs;
+	HANDLE hrtimer; // timer de alta resolução para as esperas curtas (rc_nap)
+	int tbp;        // pediu timeBeginPeriod(1) porque não há timer de alta resolução
 } rc_ctx;
 
 #define REL(p) do { if (p) { (p)->lpVtbl->Release(p); (p) = NULL; } } while (0)
 #define CHK(x, msg) do { hr = (x); if (FAILED(hr)) { snprintf(err, errlen, "%s: 0x%08lx", msg, (unsigned long)hr); goto fail; } } while (0)
+
+// rc_nap espera ~0,5 ms enquanto o encoder trabalha. Sleep(1) não serve: sem
+// timeBeginPeriod ele dura ~15,6 ms (a resolução padrão do Windows), e o Go
+// atual não muda mais essa resolução para o processo. Com duas ou quatro
+// esperas por quadro, isso sozinho prendia a transmissão em 15-30 fps. O
+// timer de alta resolução existe desde o Windows 10 1803; antes dele, o
+// rc_open pede timeBeginPeriod(1) e o Sleep(1) passa a durar ~1 ms.
+static void rc_nap(rc_ctx *c) {
+	if (c->hrtimer) {
+		LARGE_INTEGER due;
+		due.QuadPart = -5000; // 0,5 ms, em unidades de 100 ns, relativo
+		if (SetWaitableTimer(c->hrtimer, &due, 0, NULL, NULL, FALSE)) {
+			WaitForSingleObject(c->hrtimer, 50);
+			return;
+		}
+	}
+	Sleep(1);
+}
 
 static HRESULT set_size(IMFMediaType *t, REFGUID k, UINT32 a, UINT32 b) {
 	return IMFMediaType_SetUINT64(t, k, ((UINT64)a << 32) | b);
@@ -387,6 +408,8 @@ void rc_close(rc_ctx *c) {
 	REL(c->dev);
 	if (c->mfs) MFShutdown();
 	if (c->com) CoUninitialize();
+	if (c->hrtimer) CloseHandle(c->hrtimer);
+	if (c->tbp) timeEndPeriod(1);
 	free(c);
 }
 
@@ -605,6 +628,8 @@ int rc_open(rc_ctx **outp, int mode, int maxw, int fps, int kbps, int allow_hw, 
 	c->fps = fps;
 	c->kbps = kbps;
 	c->nenc = mode == RC_AVC444 ? 2 : 1;
+	c->hrtimer = CreateWaitableTimerExW(NULL, NULL, CREATE_WAITABLE_TIMER_HIGH_RESOLUTION, TIMER_ALL_ACCESS);
+	if (!c->hrtimer) c->tbp = timeBeginPeriod(1) == TIMERR_NOERROR;
 	// cada visão do AVC444 tem o próprio anel: 4 slots bastam para o encoder
 	// assíncrono e economizam memória de vídeo (são 2 texturas por slot)
 	c->ringn = mode == RC_AVC444 ? 4 : RC_RING;
@@ -818,7 +843,7 @@ static int pump_async(rc_ctx *c, rc_enc *e, int wait_ms) {
 			QueryPerformanceCounter(&n);
 			int el = (int)((n.QuadPart - s.QuadPart) * 1000 / c->qpf.QuadPart);
 			if (got || el >= wait_ms) return got;
-			Sleep(1);
+			rc_nap(c);
 			continue;
 		}
 		if (FAILED(hr)) return got ? got : -1;
@@ -905,15 +930,28 @@ done:
 }
 
 // encode_slot manda o slot a todos os encoders e espera as saídas. No
-// AVC444 as duas visões vão para a GPU antes de esperar qualquer uma: os
-// dois encoders trabalham ao mesmo tempo.
+// AVC444 as duas visões vão para a GPU antes de esperar qualquer uma, e a
+// espera é uma só para os dois encoders (com prazo comum): eles trabalham ao
+// mesmo tempo, e esperar um depois do outro dobraria o tempo por quadro.
 static int encode_slot(rc_ctx *c, int slot, int force_key) {
 	for (int i = 0; i < c->nenc; i++) {
 		int r = submit(c, &c->enc[i], c->nv12[i][slot], force_key);
 		if (r < 0) return r;
 	}
-	for (int i = 0; i < c->nenc; i++)
-		if (c->enc[i].async_) pump_async(c, &c->enc[i], 2000 / c->fps + 5);
+	LARGE_INTEGER s, n;
+	QueryPerformanceCounter(&s);
+	int wait_ms = 2000 / c->fps + 5;
+	for (;;) {
+		int pending = 0;
+		for (int i = 0; i < c->nenc; i++) {
+			rc_enc *e = &c->enc[i];
+			if (e->async_ && e->out_len == 0 && pump_async(c, e, 0) <= 0) pending = 1;
+		}
+		if (!pending) break;
+		QueryPerformanceCounter(&n);
+		if ((n.QuadPart - s.QuadPart) * 1000 / c->qpf.QuadPart >= wait_ms) break;
+		rc_nap(c);
+	}
 	return RC_NOTHING;
 }
 
