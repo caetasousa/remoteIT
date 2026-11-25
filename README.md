@@ -25,6 +25,7 @@ graph LR
 | 🔒 | **Bloquear a tela** remota (como Win+L) e **logar com outra conta** do Windows | técnico |
 | 🛡️ | **Tela de login e de bloqueio** acessíveis no modo serviço | — |
 | 🖥️ | **Visualizador do técnico para Windows**: decodificação na GPU, todas as teclas (Win, Alt+Tab) sem tela cheia, área de transferência — junto com o console no navegador | técnico |
+| 🔄 | **Atualização automática** do agente e do visualizador: publicar a versão no servidor basta; a assinatura própria do projeto impede versões falsas | — |
 | 🔐 | **Cada técnico com as suas máquinas**: o agente baixado (ou mandado por link) já sai no nome dele; só ele e os admins veem a máquina | técnico |
 | 🔗 | **Link de instalação** para o cliente baixar sem conta: com prazo e limite de máquinas, ou **permanente** | técnico |
 | 🪪 | **Credencial por máquina**: ninguém se passa por outro PC; **remover** revoga na hora | — |
@@ -216,10 +217,11 @@ make test-e2e          # 🌐 navegador real (Playwright) contra o compose (Dock
 ## ⚠️ Limitações
 
 * 🛡️ **Sem o modo serviço**, não controla janelas elevadas (UAC) nem a tela de bloqueio: o Windows não deixa um programa comum mexer nelas. A sessão mostra "tela protegida" e retoma sozinha.
-* 🖵 Só o **monitor principal**; sem área de transferência, arquivos ou áudio.
+* 🖵 Só o **monitor principal**; área de transferência só em texto, do técnico para o PC e pelo visualizador nativo; sem arquivos nem áudio.
+* 🎨 Com a tela em movimento, a cor fica em meia resolução (H.264 4:2:0); com a tela parada, o refresh de nitidez deixa a imagem idêntica à do PC.
 * ⌨️ **Ctrl+Alt+Del** não pode ser simulado (o Windows reserva essa combinação). Se a política do PC exigir Ctrl+Alt+Del antes do login, o login remoto para nessa tela.
 * 🌐 Proxy: respeita `HTTP_PROXY`/`HTTPS_PROXY`; proxy autenticado ou PAC do Windows, ainda não.
-* 🏚️ Agentes antigos (de antes do cadastro por máquina) continuam aceitos como **legados**, visíveis só para admins, até as máquinas serem reinstaladas (`RELAY_LEGACY_AGENTS`).
+* 🏚️ Agentes antigos (de antes do cadastro por máquina) são **recusados** em produção (`RELAY_LEGACY_AGENTS=false`); reinstale com um agente baixado do console.
 * 🧾 O `.exe` **não é assinado**: SmartScreen e antivírus podem bloquear (veja [docs/AGENTE-WINDOWS.md](docs/AGENTE-WINDOWS.md#antivirus)).
 * ❓ **Por que não WebRTC?** Com só a 443 TCP liberada, o WebRTC cairia em TURN sobre TCP: o mesmo transporte, com muito mais complexidade ([ADR 0004](docs/adr/0004-websocket-sobre-tcp.md)).
 

@@ -92,6 +92,15 @@
 | 🪪 Só máquinas cadastradas | oferta e download exigem a credencial da máquina |
 | 🧪 Testado | `.exe` trocado, manifesto reescrito e chave de outro projeto são recusados (`TestAgentUpdateRejectsTampering`) |
 
+### 🖥️ Visualizador do técnico ([ADR 0012](adr/0012-visualizador-nativo.md))
+
+| Defesa | Detalhe |
+|---|---|
+| 🍪 Mesma sessão do console | login em `/api/login`, as mesmas regras (limite de senhas, só máquinas do técnico) |
+| 🔐 Token guardado com DPAPI | `%LOCALAPPDATA%\RemoteIT\viewer.token` só abre para o usuário do Windows que fez login; **Sair** apaga |
+| 📋 Área de transferência só com consentimento | a mensagem `clip` é ignorada antes de `granted`, como mouse e teclado; até 1 MiB |
+| ⌨️ Hook de teclado só em primeiro plano | as teclas só são capturadas com a janela da sessão em primeiro plano e a opção **Teclado** ligada |
+
 ### 📜 Auditoria
 
 * 🔚 **Reinício do relay:** os acessos que ficaram abertos são encerrados na partida seguinte (`TestOrphanAccessesClosedOnStart`).

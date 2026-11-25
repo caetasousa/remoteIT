@@ -15,15 +15,17 @@
 | 3 | ✅ [🔄 Atualização automática do agente](#auto-update) | 🔴 | feito | acaba com "baixe de novo, confira o hash, reinstale" |
 | 4 | 🟨 [📥 Instalar sem passar pelo navegador](#sem-navegador) | 🔴 | 4a feito; resto ⏱️ 2–4 | o navegador foi a origem da maior parte dos problemas de instalação |
 | 5 | 🟨 [🛡️ Endurecer o login e o console](#login) | 🟡 | limite e CSP feitos; resto ⏱️ 2 | limite de tentativas, 2FA, CSP |
-| 6 | [⚙️ CI no GitHub, com Windows](#ci) | 🟡 | ⏱️ 2 | hoje nada do Windows é testado automaticamente |
+| 6 | [⚙️ CI no GitHub, com Windows](#ci) | 🟡 | adiado: o usuário vai definir a esteira | hoje nada do Windows é testado automaticamente |
 | 7 | 🟨 [🖥️ Visualizador nativo para o técnico](#viewer-nativo) | 🟡 | 1ª versão feita; 4:4:4 a fazer | o único caminho para cor 4:4:4 e menor latência |
-| 8 | [🧰 Funcionalidades de suporte](#funcionalidades) | 🟡 | ⏱️ variável | área de transferência, arquivos, vários monitores, Ctrl+Alt+Del |
+| 8 | 🟨 [🧰 Funcionalidades de suporte](#funcionalidades) | 🟡 | área de transferência feita; resto variável | área de transferência, arquivos, vários monitores, Ctrl+Alt+Del |
 | 9 | [📡 Transporte e desempenho](#desempenho) | 🟢 | ⏱️ 5+ | WebTransport/UDP, regiões alteradas |
 | 10 | 🟨 [📜 Auditoria, transparência e LGPD](#lgpd) | 🟡 | órfãs feito; resto ⏱️ 2–3 | aviso de "sendo acessado", retenção, gravação opcional |
 | 11 | [🏗️ Operação do servidor](#operacao) | 🟢 | ⏱️ 2–4 | versões, métricas, backup automático, relay sem derrubar sessões |
 | 12 | [📚 Repositório público](#repositorio) | 🟢 | ⏱️ 0,5 | licença, SECURITY.md, descrição |
 
 > ✅ **Feito em 24/11/2026** ([ADR 0010](adr/0010-maquinas-por-tecnico.md)): itens 1 e 2 (modelo **só o dono**; o compartilhamento foi feito e depois retirado em 25/11), 4a (link de instalação, com opção sem prazo e sem limite desde 25/11), e do item 5 o limite de tentativas no login, a CSP com os cabeçalhos de segurança; do item 10, o encerramento das sessões órfãs.
+
+> ✅ **Feito em 25/11/2026** ([ADR 0011](adr/0011-atualizacao-automatica.md), [ADR 0012](adr/0012-visualizador-nativo.md)): item 3 (**atualização automática** do agente e do visualizador, com assinatura própria Ed25519), item 7 em parte (**visualizador nativo para Windows**, 1ª versão), item 8 em parte (**área de transferência** do técnico para o PC remoto, pelo visualizador) e o fim da migração: máquinas antigas removidas e **agentes legados recusados** (`RELAY_LEGACY_AGENTS=false`) em produção.
 
 > 💡 **Também em produção desde 24/11/2026:** refresh de nitidez em PNG com a tela parada, modo 1:1 e bitrate menos nervoso ([ADR 0009](adr/0009-refresh-de-nitidez.md)). Estava pronto e sem commit na pasta e foi junto no mesmo build. Não está repetido abaixo.
 
@@ -280,9 +282,11 @@ Um **aplicativo do técnico** (Windows/macOS/Linux) que fala o mesmo protocolo d
 <a id="funcionalidades"></a>
 ## 8️⃣ 🧰 Funcionalidades de suporte
 
+> 🟨 **Em parte:** a área de transferência (texto, do técnico para o PC) foi feita em 25/11/2026 com o visualizador nativo. O resto da tabela continua a fazer.
+
 | Funcionalidade | Valor para o suporte | Esforço | Observação |
 |---|---|:---:|---|
-| 📋 **Área de transferência** (texto) | colar comandos, senhas de Wi-Fi, links | ⏱️ 1–2 | no navegador, só com clique do técnico (API Clipboard) |
+| ✅ 📋 **Área de transferência** (texto) | colar comandos, senhas de Wi-Fi, links | feito (25/11) | do técnico para o PC remoto, pelo visualizador nativo (mensagem `clip`, só com consentimento); falta o sentido inverso e o botão no console web |
 | 📁 **Transferir arquivos** | mandar um instalador, pegar um log | ⏱️ 3 | precisa de permissão própria (item 1) e auditoria |
 | 🖵 **Vários monitores** | hoje só o principal | ⏱️ 2–3 | escolher monitor na barra |
 | ⌨️ **Ctrl+Alt+Del** | logins que exigem SAS | ⏱️ 1 | `SendSAS` funciona só no modo serviço e exige a política "permitir SAS por software" |
@@ -350,6 +354,22 @@ Um **aplicativo do técnico** (Windows/macOS/Linux) que fala o mesmo protocolo d
 | 🏷️ Descrição, tópicos e site no "About" do GitHub | o repositório aparece vazio na busca |
 | 🧾 Releases com os `.exe` e os hashes | quem quiser testar não precisa compilar |
 | 🧪 Selo do CI no README | mostra que os testes passam (depende do item 6) |
+
+---
+
+## 🖼️ Qualidade de imagem: o que mudou de fato
+
+> 🗣️ **Em palavras simples:** com a tela **parada**, a imagem ficou perfeita; com a tela **mexendo**, ainda é a mesma de antes. Avaliação pelo que cada mudança faz, sem medição de PSNR/SSIM.
+
+| Mudança | Efeito |
+|---|---|
+| Refresh de nitidez em PNG ([ADR 0009](adr/0009-refresh-de-nitidez.md)) | **grande** com a tela parada: 300 ms depois, a imagem é idêntica à do PC (texto e cores); só nos presets de resolução nativa |
+| Modo Tamanho real (1:1) | **visível** em monitores com escala 125–150%: sem o borrado do redimensionamento |
+| Bitrate menos nervoso | **pequeno**: menos quedas de qualidade em soluços de rede |
+| Visualizador nativo | **nenhum na imagem** por enquanto (mesmo H.264 4:2:0 do navegador); o ganho é em teclado e decodificação na GPU |
+| Máquinas por técnico, links, atualização | nenhum (segurança e operação) |
+
+**Ainda não resolvido:** com a tela em movimento, a cor fica em meia resolução (4:2:0). A próxima etapa é o **4:4:4** no visualizador nativo, que exige mudar o encoder do agente (item 7).
 
 ---
 

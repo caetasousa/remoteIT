@@ -20,6 +20,7 @@ Os diagramas são [Mermaid](https://mermaid.js.org/): o GitHub os desenha sozinh
 | 1️⃣2️⃣ | [Entregar uma versão nova do agente](#entrega) | por que o download nunca vem do cache |
 | 1️⃣3️⃣ | [Máquinas por técnico](#maquinas) | o `.exe` marcado, o cadastro e o link de instalação |
 | 1️⃣4️⃣ | [Atualização automática](#atualizacao) | o agente se troca sozinho pela versão que o relay anuncia |
+| 1️⃣5️⃣ | [Visualizador do técnico](#visualizador) | o mesmo protocolo, num programa Windows: teclado inteiro e área de transferência |
 
 ---
 
@@ -68,7 +69,7 @@ sequenceDiagram
 | Backoff | 1 s, dobrando até 30 s; volta a 1 s após 30 s conectado | `internal/agent/relayclient` |
 | Keepalive | ping a cada 20 s; leitura expira em 60 s | `relayclient`, `httpapi` |
 | Mesma máquina duas vezes | a conexão nova substitui a antiga (só com a mesma credencial) | `internal/relay/hub` |
-| Agente antigo (sem cadastro) | `?id=nome&key=chave`, aceito como **legado** e visível só para admins | `RELAY_LEGACY_AGENTS` |
+| Agente antigo (sem cadastro) | `?id=nome&key=chave`: com `RELAY_LEGACY_AGENTS=true`, aceito como **legado** (só admins veem); em produção está `false` e ele recebe 403 | `RELAY_LEGACY_AGENTS` |
 
 > ⚠️ **Duas cópias com a mesma credencial se derrubam** em loop ("conectado/desconectado" no log do relay). Por isso o agente portátil sai em silêncio quando já há outra cópia ou o serviço rodando ([fluxo 9](#instalar)). Portátil e serviço no mesmo PC têm credenciais diferentes e aparecem como duas máquinas.
 
@@ -665,4 +666,38 @@ sequenceDiagram
 | Prova de legitimidade | assinatura Ed25519 de edição + versão + SHA-256, e o SHA-256 do `.exe` baixado |
 | Rollback | publicar a versão anterior: os agentes seguem "a versão do relay", não "a maior" |
 | Agentes antigos | os instalados antes desta versão não têm o atualizador: reinstalar uma vez à mão |
+
+---
+
+<a id="visualizador"></a>
+## 1️⃣5️⃣ Visualizador do técnico (Windows)
+
+> 🗣️ **Em palavras simples:** o visualizador fala com o relay exatamente como o console no navegador: mesmo login, mesma lista, mesmo WebSocket de tela. A diferença está nas pontas: ele decodifica o vídeo pelo Windows (na placa de vídeo) e pega o teclado inteiro antes do Windows, para Win e Alt+Tab irem para o PC remoto. Guia: [VISUALIZADOR.md](VISUALIZADOR.md).
+
+```mermaid
+sequenceDiagram
+    autonumber
+    participant T as 🧑‍💻 Técnico (teclado)
+    participant V as 🖥️ remoteit-tecnico.exe
+    participant R as 🔀 Relay
+    participant A as 🖥️ Agente
+    V->>R: POST /api/login (token guardado com DPAPI)
+    V->>R: GET /api/agents a cada 3 s
+    V->>R: GET /ws/viewer?id=m_… (mesmo cookie)
+    V->>A: hello {h264: true se o Media Foundation abriu}
+    A->>V: quadro H.264 → Media Foundation (GPU) → BGRA → GDI
+    V->>A: ack (só depois de desenhar)
+    T->>V: Win+R (hook de teclado: não chega ao Windows local)
+    V->>A: kd MetaLeft · kd KeyR · ku… (nomes do protocolo)
+    T->>V: Ações ▸ Enviar área de transferência
+    V->>A: {"t":"clip","text":"ipconfig /all"}
+    A->>A: só com consentimento: põe o texto na área de transferência
+```
+
+| Detalhe | Onde |
+|---|---|
+| API e protocolo (Go puro, testado no Linux) | [`internal/viewer/client`](../internal/viewer/client) |
+| H.264 pelo Media Foundation, GPU (DXVA) ou CPU; JPEG/PNG | [`internal/viewer/decode`](../internal/viewer/decode) |
+| Janelas, desenho, mouse, hook de teclado, teclas mortas | [`internal/viewer/win`](../internal/viewer/win) |
+| Tabela de teclas compartilhada com o agente | [`internal/protocol/keys.go`](../internal/protocol/keys.go) |
 

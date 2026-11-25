@@ -14,7 +14,7 @@ graph LR
     subgraph SRV["🗄️ Servidor · usuário remoteit · 🐳 Docker rootless"]
         CD["cloudflared"] --> RL["🔀 relay :8080<br/>distroless, não-root"]
         RL --> DB[("🐘 db<br/>volume db-data")]
-        RL -. "lê" .-> DIST["📁 ./dist (ro)<br/>suporte-ti.exe<br/>suporte-ti-servico.exe"]
+        RL -. "lê" .-> DIST["📁 ./dist (ro)<br/>suporte-ti.exe<br/>suporte-ti-servico.exe<br/>remoteit-tecnico.exe<br/>update.json"]
     end
 ```
 
@@ -155,7 +155,7 @@ primeira vez; `UPDATE_KEY` muda o caminho). Os agentes só aceitam atualizaçõe
 ```mermaid
 flowchart TD
     B["🔧 build.sh<br/>(NO_CONSENT=1 se for o caso)"] --> Q{"o que mudou?"}
-    Q -- "só o agente" --> EXE["📋 troca os .exe e o update.json em ~remoteit/app/dist/<br/>(backup ao lado)"]
+    Q -- "só o agente ou o visualizador" --> EXE["📋 troca os 3 .exe e o update.json em ~remoteit/app/dist/<br/>(backup ao lado)"]
     EXE --> OK(["✅ sem reiniciar nada: o próximo download já é o novo<br/>e as máquinas se atualizam em até 1 h"])
     Q -- "relay ou console" --> S{"há sessão remota aberta?<br/>access_log com ended_at nulo"}
     S -- sim --> ASK(["⏸️ combine com quem está usando"])

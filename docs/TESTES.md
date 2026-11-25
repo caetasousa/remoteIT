@@ -33,6 +33,8 @@ possível as dependências são reais (banco, relay, WebSocket, agente). Motivo:
 | `relay/identity` | Validação de nome, senha e papel; não remover a si mesmo |
 | `relay/httpapi` | Limite por IP e agrupamento de IPv6; limite de login conta só falhas, por IP e por usuário |
 | `relay/mail` | Validação da configuração SMTP |
+| `protocol` (teclas) | toda tecla que o agente injeta volta ao mesmo nome no visualizador (`KeyToVK` ↔ `CodeForVK`) |
+| `viewer/decode` | JPEG e PNG viram BGRA com as cores certas |
 | `agent/media` | Bitrate adaptativo; controle de fluxo (limite em trânsito, quadro lento, ACK perdido, ACK falso); **a captura troca de thread quando o desktop não pode ser seguido e volta a transmitir** (`TestStreamRecoversWhenDesktopCanBeFollowedAgain`) |
 | `agent/input` | Tabela `KeyboardEvent.code` → virtual-key |
 
@@ -47,6 +49,7 @@ cria um relay completo com `httptest` sobre o banco limpo (`newEnv`).
 | `accounts_test.go` | com Mailpit real: cadastro e aprovação, primeiro admin por e-mail, campos injetados, link vencido, reusado e concorrente, recuperação derruba sessão e tela, vínculo de e-mail, limites, migração de banco existente |
 | `agent_test.go` | agente real transmite JPEG válido 640x360 e envia stats, consentimento negado → nenhum quadro, **sem ACK no máximo 2 quadros** e retomada após ACK, **input só depois do consentimento**, **bloquear a tela só depois do consentimento** (`TestLockOnlyAfterConsent`) |
 | `machines_test.go` | **o binário real do agente, baixado pelo técnico, se cadastra sozinho e só aparece para a dona e os admins**, e reusa a identidade ao rodar de novo (`TestDownloadedAgentBelongsToItsTechnician`); credencial errada → 401, legado não usa ID `m_`, remover derruba e dá 403; link de instalação público com limite de máquinas, revogação e a versão sem prazo e sem limite; limite de login; cabeçalhos de segurança; acessos órfãos encerrados na partida |
+| `viewer_test.go` | o **cliente do visualizador nativo** contra relay e agente reais: login, sessão guardada, lista, mais de 2 quadros (os acks voltam), mouse, teclado e área de transferência chegando ao agente, técnico sem acesso, logout |
 | `update_test.go` | com a ferramenta de assinatura real: o agente recebe exatamente o `.exe` publicado; mesma versão não faz nada; técnico conectado adia; legado não atualiza; `.exe` trocado, manifesto reescrito ou chave de outro projeto são recusados; a versão aparece no console |
 | `storage_test.go` | migrations idempotentes, auditoria sobrevive à remoção do usuário, sessão vencida rejeitada, admin inicial só com banco vazio |
 
@@ -75,7 +78,9 @@ Falhou? O Playwright grava trace em `frontend/test-results/`; abra com `npx play
 
 ## 🪟 Fora do CI: checklist manual por release (Windows real)
 
-O CI roda no Linux, então nada abaixo é exercitado automaticamente: `SendInput`, DXGI, Media Foundation, serviço do Windows e desktops. O que compila no Windows é garantido por `GOOS=windows go vet` e `go build`; o comportamento, só por esta lista.
+Os testes rodam no Linux, então nada abaixo é exercitado automaticamente: `SendInput`, DXGI, Media Foundation, serviço do Windows e desktops. O que compila no Windows é garantido por `GOOS=windows go vet` e `go build`; o comportamento, só por esta lista.
+
+Para a janela do visualizador há um teste de fumaça no Wine (container com Xvfb e `xdotool`: login, lista, sessão e vídeo). Ele não cobre o Media Foundation, o hook de teclado nem o DPAPI.
 
 **▶️ Portátil (`suporte-ti.exe`)**
 
@@ -86,6 +91,16 @@ O CI roda no Linux, então nada abaixo é exercitado automaticamente: `SendInput
 - [ ] Mouse, teclado com acentos (ç, ã) e Ctrl+Shift+Esc
 - [ ] UAC mostra "tela protegida" e retoma
 - [ ] Monitor com escala de 125%+: o clique cai no lugar certo
+
+**🖥️ Visualizador do técnico (`remoteit-tecnico.exe`)**
+
+- [ ] Login, e a sessão continua ao fechar e abrir o programa (DPAPI)
+- [ ] Título mostra "decodificação na GPU" numa máquina com placa de vídeo
+- [ ] Win, Win+R, Alt+Tab e Ctrl+Esc chegam ao PC remoto com a janela em primeiro plano; com **Teclado** desligado, ficam no PC local
+- [ ] Teclas mortas: ´ + a vira "á" no PC remoto (teclado ABNT2)
+- [ ] Ctrl+Alt+F entra e sai da tela cheia; Tamanho real fica 1:1
+- [ ] Enviar área de transferência + Ctrl+V cola o texto no PC remoto
+- [ ] Atualização automática: publicar uma versão nova troca o visualizador sem sessão aberta
 
 **🧩 Serviço (`suporte-ti-servico.exe`)**
 
