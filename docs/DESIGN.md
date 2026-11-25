@@ -25,6 +25,7 @@ O rótulo mais escuro (`#44525c`) ainda passa 4,5:1 de contraste sobre os três 
 | `Frame` | Moldura de 1280 px com titlebar de shell (`root@relay:~/console$` + pontos coloridos) e cabeçalho em três colunas |
 | `Entrance` | Entrada: mensagem (3/4) e formulário no trilho (1/4) |
 | `Sequence` | Seção: trilho com `$ comando` e leituras (1/4) e trabalho (3/4) |
+| `ConfirmDialog` | Modal de confirmação (`<dialog>` nativo), aberto por `ask()` de `lib/confirm.svelte.ts` |
 
 ## 📏 Regras
 
@@ -36,6 +37,10 @@ O rótulo mais escuro (`#44525c`) ainda passa 4,5:1 de contraste sobre os três 
 - **Movimento respeita `prefers-reduced-motion`.**
 - **Nada de CDN:** a fonte vai no binário, para funcionar atrás do firewall corporativo.
 - **Tabela no celular:** cada `td` precisa de `data-label`.
+- **Nada de `alert`/`confirm`/`prompt` do navegador.** Confirmações usam `await ask({title, message,
+  confirm, danger})`, que abre o `ConfirmDialog`: segue o tema, não trava a página e aparece por cima
+  da tela remota em tela cheia. Ações destrutivas (`danger`) têm o botão em vermelho e o foco começa
+  em **Cancelar**, para um Enter não confirmar sem querer. Esc ou clique fora cancelam.
 - **Sem WebGL.** A iteração anterior tinha um objeto 3D decorativo na entrada (Three.js); este tema
   não usa — `frontend/src/lib/effects/` e a dependência `three` foram removidos.
 
@@ -49,7 +54,7 @@ ficar desalinhado:
 │ ← Voltar │ Qualidade ▾          │ 1:1 │ ⌨  │ 🔒 │ Tela cheia │ Codec  Resolução  FPS  Banda RTT│
 └──────────┴──────────────────────┴─────┴────┴────┴────────────┴─────────────────────────────────┘
    texto      select (aria-label)  Tamanho Ctrl+  Bloquear  primário   chips de telemetria
-   visível                         real    Shift+Esc (confirm)
+   visível                         real    Shift+Esc (modal)
 ```
 
 - `← Voltar` mantém o texto visível: o E2E procura o botão por esse nome acessível.

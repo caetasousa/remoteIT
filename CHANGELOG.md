@@ -71,6 +71,9 @@ O formato segue o [Keep a Changelog](https://keepachangelog.com/pt-BR/1.1.0/) e 
 
 ### Changed
 
+- O console não usa mais `confirm()` do navegador: remover máquina ou usuário, aprovar conta, revogar
+  link e bloquear a tela remota pedem confirmação num modal no tema do console (Esc cancela; nas
+  ações destrutivas o foco começa em "Cancelar").
 - O pacote `internal/agent/media/h264` passou a se chamar `internal/agent/media/gpu` (tem H.264,
   AVC444 e AV1); o decodificador do visualizador (`rcdec.h`) entrega NV12 e a conversão de cor foi
   para `internal/viewer/decode/yuv.h`, testada no Linux.

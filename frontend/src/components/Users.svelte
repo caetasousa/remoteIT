@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { ask } from '../lib/confirm.svelte';
   import { api, type Role, type User } from '../lib/api';
   import Sequence from './layout/Sequence.svelte';
 
@@ -31,7 +32,12 @@
   }
 
   async function approve(u: User) {
-    if (!confirm(`Aprovar ${u.username} (${u.email})? A conta verá as máquinas dos agentes e links que ela gerar.`)) return;
+    const ok = await ask({
+      title: `Aprovar ${u.username}?`,
+      message: `${u.email} — a conta verá as máquinas dos agentes e links que ela gerar.`,
+      confirm: 'Aprovar',
+    });
+    if (!ok) return;
     error = '';
     try {
       await api.approveUser(u.id);
@@ -42,7 +48,13 @@
   }
 
   async function remove(u: User) {
-    if (!confirm(`Remover o usuário ${u.username}?`)) return;
+    const ok = await ask({
+      title: `Remover o usuário ${u.username}?`,
+      message: 'A sessão e a tela remota que ele tiver aberta caem na hora. As máquinas dele continuam aparecendo para os admins.',
+      confirm: 'Remover',
+      danger: true,
+    });
+    if (!ok) return;
     error = '';
     try {
       await api.deleteUser(u.id);

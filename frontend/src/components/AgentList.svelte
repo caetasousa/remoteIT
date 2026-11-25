@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { ask } from '../lib/confirm.svelte';
   import { api, type Edition, type InstallLink, type Machine, type User } from '../lib/api';
   import Sequence from './layout/Sequence.svelte';
 
@@ -54,11 +55,16 @@
     }
   }
 
-  function remove(m: Machine) {
-    const msg = m.legacy
-      ? `Remover ${m.name}? O agente antigo dessa máquina deixa de ser aceito.`
-      : `Remover ${m.name}? O agente dela é desconectado e não volta sozinho; para usar de novo, instale um agente novo.`;
-    if (confirm(msg)) run(() => api.removeMachine(m.id));
+  async function remove(m: Machine) {
+    const ok = await ask({
+      title: `Remover ${m.name}?`,
+      message: m.legacy
+        ? 'O agente antigo dessa máquina deixa de ser aceito.'
+        : 'O agente dela é desconectado e não volta sozinho; para usar de novo, instale um agente novo.',
+      confirm: 'Remover',
+      danger: true,
+    });
+    if (ok) run(() => api.removeMachine(m.id));
   }
 
   async function createLink(e: SubmitEvent) {
@@ -80,7 +86,13 @@
   }
 
   async function revoke(l: InstallLink) {
-    if (!confirm('Revogar este link? Quem ainda não instalou não consegue mais baixar.')) return;
+    const ok = await ask({
+      title: 'Revogar este link?',
+      message: 'Quem ainda não instalou não consegue mais baixar nem usar o comando do PowerShell.',
+      confirm: 'Revogar',
+      danger: true,
+    });
+    if (!ok) return;
     await api.revokeLink(l.id).catch(() => {});
     await loadLinks();
   }

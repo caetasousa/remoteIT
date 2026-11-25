@@ -76,7 +76,7 @@ container e derruba tudo com `down -v`.
 | criar e recuperar conta | link do Mailpit, aprovação, login por e-mail, senha antiga deixa de valer |
 | associar e-mail | conta antiga confirma o link mesmo tendo saído |
 | técnico isolado | admin cadastra um técnico; o técnico **não vê** a máquina do admin nem tem botão de compartilhar; o acesso do admin aparece na auditoria encerrado |
-| link de instalação | gerar pela tela um link **sem prazo e sem limite**; ele abre sem login; um link inventado dá 404; o **comando do PowerShell** aparece e o script `/ps` responde (404 para link inventado) |
+| link de instalação | gerar pela tela um link **sem prazo e sem limite**; ele abre sem login; um link inventado dá 404; o **comando do PowerShell** aparece e o script `/ps` responde (404 para link inventado); **revogar abre o modal**: Esc cancela, o botão revoga e o link para de baixar |
 
 Falhou? O Playwright grava trace em `frontend/test-results/`; abra com `npx playwright show-trace`.
 

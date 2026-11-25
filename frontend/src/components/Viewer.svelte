@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { ask } from '../lib/confirm.svelte';
   import type { Machine } from '../lib/api';
   import { PRESETS, type Preset } from '../lib/protocol';
   import { attachInput, sendCtrlShiftEsc, sendLock } from '../lib/viewer/input';
@@ -139,8 +140,17 @@
   // troca para a estação de janela segura — veja internal/agent/lock).
   // Confirma antes: ao contrário do Ctrl+Shift+Esc, não dá para desfazer
   // daqui, e quem está na máquina precisa logar de novo para continuar.
-  function lockStation() {
-    if (!confirm(`Bloquear a tela de ${agent.name}? Quem estiver usando o PC vai precisar entrar de novo.`)) return;
+  async function lockStation() {
+    const ok = await ask({
+      title: `Bloquear a tela de ${agent.name}?`,
+      message: 'Quem estiver usando o PC vai precisar entrar de novo.',
+      confirm: 'Bloquear',
+      danger: true,
+    });
+    if (!ok) {
+      canvas.focus();
+      return;
+    }
     sendLock((m) => session.send(m));
     canvas.focus();
   }

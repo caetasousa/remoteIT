@@ -67,8 +67,12 @@ test('cria conta, espera aprovação e recupera o acesso', async ({ page }) => {
   await page.getByRole('button', { name: 'Usuários' }).click();
   const row = page.getByTestId('user-row').filter({ hasText: email });
   await expect(row).toContainText('Aguardando aprovação');
-  page.once('dialog', (d) => d.accept());
   await row.getByRole('button', { name: 'Aprovar' }).click();
+  // a confirmação é um modal do console, não o confirm() do navegador
+  const modal = page.getByRole('dialog');
+  await expect(modal).toContainText(`Aprovar ${user}?`);
+  await modal.getByRole('button', { name: 'Aprovar' }).click();
+  await expect(modal).toBeHidden();
   await expect(row).toContainText('Ativo');
   await logout(page);
 

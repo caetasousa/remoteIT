@@ -10,6 +10,7 @@
   import LinkEmail from './components/LinkEmail.svelte';
   import Entrance from './components/layout/Entrance.svelte';
   import Frame from './components/layout/Frame.svelte';
+  import ConfirmDialog from './components/layout/ConfirmDialog.svelte';
   import { takeAccountLink } from './lib/route';
 
   type Tab = 'agents' | 'users' | 'audit';
@@ -68,6 +69,8 @@
 </script>
 
 <svelte:window onhashchange={onHashChange} />
+
+<ConfirmDialog />
 
 {#if loading}
   <p class="label loading">Carregando…</p>

@@ -135,4 +135,20 @@ test('link de instalação baixa o agente sem login', async ({ page, request }) 
   const ps = await request.get(new URL(url).pathname + '/ps');
   expect([200, 503]).toContain(ps.status());
   expect((await request.get('/i/nao-existe/ps')).status()).toBe(404);
+
+  // revogar pede confirmação num modal do console: Esc cancela, o botão revoga
+  const items = page.locator('.links li');
+  const before = await items.count();
+  await items.first().getByRole('button', { name: 'revogar' }).click();
+  const modal = page.getByRole('dialog');
+  await expect(modal).toContainText('Revogar este link?');
+  await page.keyboard.press('Escape');
+  await expect(modal).toBeHidden();
+  await expect(items).toHaveCount(before);
+  await items.first().getByRole('button', { name: 'revogar' }).click();
+  await modal.getByRole('button', { name: 'Revogar' }).click();
+  await expect(modal).toBeHidden();
+  await expect(items).toHaveCount(before - 1);
+  // o link revogado não baixa mais
+  expect((await request.get(new URL(url).pathname)).status()).toBe(404);
 });
