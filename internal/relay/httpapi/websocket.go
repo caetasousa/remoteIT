@@ -62,7 +62,7 @@ func (s *server) agentWS(w http.ResponseWriter, r *http.Request) {
 	defer c.Close()
 
 	a := s.Hub.Register(id, host, user, truncate(q.Get("ver")), c)
-	s.Logger.Info("agente conectado", "id", a.ID, "host", a.Host, "user", a.User)
+	s.Logger.Info("agente conectado", "id", a.ID, "host", a.Host, "user", a.User, "versao", truncate(q.Get("ver")))
 	defer func() {
 		s.Hub.Unregister(a)
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
