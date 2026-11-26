@@ -147,9 +147,10 @@ const (
 	lbsNoIntegralHeight = 0x0100
 	ssLeft              = 0x0000
 
-	swHide       = 0
-	swShow       = 5
-	swShowNormal = 1
+	swHide          = 0
+	swShow          = 5
+	swShowNormal    = 1
+	swShowMaximized = 3
 
 	lbAddString    = 0x0180
 	lbResetContent = 0x0184

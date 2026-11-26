@@ -117,3 +117,31 @@ func BenchmarkAVC444ToBGRA1080p(b *testing.B) {
 		avc444ToBGRA(main, aux, 1920, 1080, out)
 	}
 }
+
+// A cor de meia resolução é interpolada na posição padrão do H.264: na
+// horizontal, a coluna ímpar é a média das vizinhas; na vertical, 3/4 da
+// linha do bloco e 1/4 da vizinha. Repetir o bloco 2x2 serrilhava texto.
+func TestNV12ToBGRAInterpolatesChroma(t *testing.T) {
+	const w, h = 4, 4
+	blue := func(uv []byte) []byte {
+		nv := append(bytes.Repeat([]byte{126}, w*h), uv...)
+		out := make([]byte, w*h*4)
+		nv12ToBGRA(nv, w, h, out)
+		b := make([]byte, w*h)
+		for i := range b {
+			b[i] = out[i*4]
+		}
+		return b
+	}
+	// U muda entre as colunas de cor (128 | 192), igual nas duas linhas
+	got := blue([]byte{128, 128, 192, 128, 128, 128, 192, 128})
+	if want := []byte{128, 195, 255, 255}; !bytes.Equal(got[:4], want) {
+		t.Fatalf("horizontal: %v, quer %v", got[:4], want)
+	}
+	// U muda entre as linhas de cor (128 em cima, 192 embaixo)
+	got = blue([]byte{128, 128, 128, 128, 192, 128, 192, 128})
+	col := []byte{got[0], got[4], got[8], got[12]}
+	if want := []byte{128, 161, 229, 255}; !bytes.Equal(col, want) {
+		t.Fatalf("vertical: %v, quer %v", col, want)
+	}
+}

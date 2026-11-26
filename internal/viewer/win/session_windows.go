@@ -129,7 +129,10 @@ func (a *App) openSession(m client.Machine) {
 	openSessions.Add(1)
 	w.buildMenu()
 	w.openRenderer()
-	show(w.hwnd, true)
+	// maximizada, como uma aba do navegador: o agente manda o vídeo do
+	// tamanho da área, e uma janela pequena recebia a tela reduzida (texto
+	// menos nítido que no console web)
+	pShowWindow.Call(uintptr(w.hwnd), swShowMaximized)
 	w.layout()
 	pUpdateWindow.Call(uintptr(w.hwnd))
 
@@ -146,7 +149,7 @@ func (w *sessionWin) buildMenu() {
 		pAppendMenuW.Call(q, mfString, uintptr(idPreset0+i), uintptr(unsafe.Pointer(utf16(p.Label))))
 	}
 	pAppendMenuW.Call(q, mfSeparator, 0, 0)
-	pAppendMenuW.Call(q, mfString, idColor444, uintptr(unsafe.Pointer(utf16("Cor 4:4:4 (texto colorido nítido; só na resolução nativa)"))))
+	pAppendMenuW.Call(q, mfString, idColor444, uintptr(unsafe.Pointer(utf16("Cor 4:4:4 (texto colorido nítido; nos modos Nítido e Máximo)"))))
 	v, _, _ := pCreatePopupMenu.Call()
 	pAppendMenuW.Call(v, mfString, idActualSize, uintptr(unsafe.Pointer(utf16("Tamanho real (1:1)"))))
 	pAppendMenuW.Call(v, mfString, idFullscreen, uintptr(unsafe.Pointer(utf16("Tela cheia\tCtrl+Alt+F"))))

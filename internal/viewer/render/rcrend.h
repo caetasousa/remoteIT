@@ -92,11 +92,21 @@ static const char rr_hlsl[] =
 	"  float2 t = float2((id << 1) & 2, id & 2);\n"
 	"  pos = float4(t * float2(2, -2) + float2(-1, 1), 0, 1);\n"
 	"}\n"
-	// H.264/AV1: BT.709 faixa limitada, cor do bloco 2x2 (como yuv.h nv12_to_bgra)
+	// H.264/AV1: BT.709 faixa limitada, cor interpolada na posição padrão do
+	// H.264 (mesma conta inteira de yuv.h nv12_to_bgra)
+	"int2 cuv(int2 c) { return int2(round(tuv.Load(int3(c, 0)) * 255.0)); }\n"
+	"int2 chroma_h(int x, int j, int cw) {\n"
+	"  int i = x >> 1;\n"
+	"  if ((x & 1) == 0) return 2 * cuv(int2(i, j));\n"
+	"  return cuv(int2(i, j)) + cuv(int2(min(i + 1, cw - 1), j));\n"
+	"}\n"
 	"float4 ps_nv12(float4 p : SV_Position) : SV_Target {\n"
 	"  int2 q = int2(p.xy);\n"
+	"  int cw = (info.x + 1) / 2, ch = (info.y + 1) / 2;\n"
+	"  int j = q.y >> 1, jn = (q.y & 1) ? min(j + 1, ch - 1) : max(j - 1, 0);\n"
+	"  int2 s = (3 * chroma_h(q.x, j, cw) + chroma_h(q.x, jn, cw) + 4) >> 3;\n"
 	"  float Y = 1.164384 * (ty.Load(int3(q, 0)) * 255.0 - 16.0);\n"
-	"  float2 c = tuv.Load(int3(q / 2, 0)) * 255.0 - 128.0;\n"
+	"  float2 c = float2(s) - 128.0;\n"
 	"  float3 rgb = float3(Y + 1.792741 * c.y, Y - 0.213249 * c.x - 0.532909 * c.y, Y + 2.112402 * c.x);\n"
 	"  return float4(saturate(rgb / 255.0), 1);\n"
 	"}\n"

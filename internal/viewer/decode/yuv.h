@@ -15,15 +15,32 @@ static inline uint8_t yuv_clamp8(int v) { return v < 0 ? 0 : v > 255 ? 255 : (ui
 // AV1 comuns do agente) para BGRA, em ponto fixo (x1024). src tem o plano Y
 // com pitch bytes por linha e o plano UV logo depois de plane_h linhas; só
 // w x h é convertido (o decodificador pode alinhar a altura, ex. 1088).
+//
+// A cor (meia resolução) é interpolada, como fazem o navegador e a placa de
+// vídeo, na posição padrão do H.264 (chroma_loc 0): na horizontal, junto
+// das colunas pares (a ímpar é a média das vizinhas); na vertical, entre as
+// duas linhas (3/4 da linha do bloco, 1/4 da vizinha). Repetir a cor do
+// bloco 2x2 deixava serrilhada a borda de texto colorido. O shader ps_nv12
+// (internal/viewer/render/rcrend.h) faz a mesma conta.
+static inline int nv12_chroma_h(const uint8_t *row, int x, int cw, int c) {
+	int i = x >> 1;
+	if (!(x & 1)) return 2 * row[2 * i + c];
+	int k = i + 1 < cw ? i + 1 : i;
+	return row[2 * i + c] + row[2 * k + c];
+}
+
 static void nv12_to_bgra(const uint8_t *src, long pitch, unsigned plane_h, int w, int h, uint8_t *dst) {
 	const uint8_t *uv = src + (size_t)pitch * plane_h;
+	int cw = (w + 1) / 2, ch = (h + 1) / 2;
 	for (int y = 0; y < h; y++) {
 		const uint8_t *yr = src + (size_t)pitch * y;
-		const uint8_t *cr = uv + (size_t)pitch * (y / 2);
+		int j = y >> 1, jn = (y & 1) ? (j + 1 < ch ? j + 1 : j) : (j > 0 ? j - 1 : 0);
+		const uint8_t *cr = uv + (size_t)pitch * j, *cn = uv + (size_t)pitch * jn;
 		uint8_t *o = dst + (size_t)w * 4 * y;
 		for (int x = 0; x < w; x++) {
 			int Y = 1192 * (yr[x] - 16);
-			int U = cr[x & ~1] - 128, V = cr[(x & ~1) + 1] - 128;
+			int U = ((3 * nv12_chroma_h(cr, x, cw, 0) + nv12_chroma_h(cn, x, cw, 0) + 4) >> 3) - 128;
+			int V = ((3 * nv12_chroma_h(cr, x, cw, 1) + nv12_chroma_h(cn, x, cw, 1) + 4) >> 3) - 128;
 			o[0] = yuv_clamp8((Y + 2163 * U) >> 10);
 			o[1] = yuv_clamp8((Y - 218 * U - 546 * V) >> 10);
 			o[2] = yuv_clamp8((Y + 1836 * V) >> 10);

@@ -149,6 +149,12 @@ O formato segue o [Keep a Changelog](https://keepachangelog.com/pt-BR/1.1.0/) e 
 
 ### Fixed
 
+- Visualizador do técnico com imagem pior que a do console web:
+  - a janela da sessão abria em 1280 x 800, e o agente, que manda o vídeo do tamanho da área,
+    reduzia a tela mais do que para uma aba maximizada; agora ela abre maximizada;
+  - no vídeo comum (4:2:0), a cor de cada bloco 2 x 2 era repetida, serrilhando a borda de texto
+    colorido; agora é interpolada na posição padrão do H.264, como no navegador (shader e
+    conversão pela CPU).
 - Visualizador do técnico torto com o Windows em 125% ou 150%: a janela nascia no tamanho de 100% e
   os campos, já na escala, passavam da borda direita. Agora a janela tem a área certa em qualquer
   escala, acompanha a troca de monitor e, em tela baixa, encolhe a lista para caber.
