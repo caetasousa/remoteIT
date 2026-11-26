@@ -275,39 +275,25 @@
       <span aria-hidden="true">⛶</span> Tela cheia
     </button>
 
-    <!-- a telemetria ocupa o que sobra da barra; faltando espaço, somem
-         primeiro os chips de prioridade 3, depois os de 2 (veja o CSS) e o
-         Codec, a Resolução, os FPS, a Banda e o RTT ficam sempre -->
+    <!-- telemetria fixa: sempre os mesmos campos, cada um com largura fixa
+         ("—" sem dado), para nada pular nem mudar de lugar a cada segundo -->
     <dl class="telemetry stats" aria-label="Telemetria">
-      {#if stats}
-        <div class="chip" title={stats.enc}><span>Codec</span><b class="codec">{codecName(stats.enc)}</b></div>
-        <div class="chip"><span>Resolução</span><b>{stats.res}</b></div>
-        <div class="chip"><span>FPS</span><b>{stats.fps}</b></div>
-        <div class="chip"><span>Banda</span><b>{stats.mbps} Mbps</b></div>
-        <div class="chip"><span>RTT</span><b class={rttLevel}>{stats.rtt} ms</b></div>
-        {#if stats.queue !== null}
-          <div class="chip p2" title="Quanto os quadros esperam em fila no caminho (RTT menos o RTT sem fila)">
-            <span>Fila</span><b class={queueLevel}>{stats.queue} ms</b>
-          </div>
-        {/if}
-        {#if stats.encMs !== null}
-          <div class="chip p3" title="Captura + codificação no PC remoto">
-            <span>Codif.</span><b>{stats.encMs.toFixed(1)} ms</b>
-          </div>
-        {/if}
-        {#if stats.decMs !== null}
-          <div class="chip p3" title="Da chegada do quadro ao desenho, aqui">
-            <span>Decod.</span><b>{stats.decMs.toFixed(1)} ms</b>
-          </div>
-        {/if}
-        {#if stats.route === 'local'}
-          <div class="chip p3" title="Aberto pelo endereço do próprio PC do relay: sem a volta pela internet">
-            <span>Rota</span><b class="ok">local</b>
-          </div>
-        {/if}
-      {:else}
-        <div class="chip"><span>Sinal</span><b class="muted">aguardando…</b></div>
-      {/if}
+      <div class="chip w-codec" title={stats?.enc ?? ''}>
+        <span>Codec</span><b class="codec">{stats ? codecName(stats.enc) : '—'}</b>
+      </div>
+      <div class="chip w-res"><span>Resolução</span><b>{stats?.res ?? '—'}</b></div>
+      <div class="chip w-fps"><span>FPS</span><b>{stats?.fps ?? '—'}</b></div>
+      <div class="chip w-mbps"><span>Banda</span><b>{stats ? `${stats.mbps} Mbps` : '—'}</b></div>
+      <div class="chip w-ms"><span>RTT</span><b class={rttLevel}>{stats ? `${stats.rtt} ms` : '—'}</b></div>
+      <div class="chip w-ms" title="Quanto os quadros esperam em fila no caminho (RTT menos o RTT sem fila)">
+        <span>Fila</span><b class={queueLevel}>{stats?.queue != null ? `${stats.queue} ms` : '—'}</b>
+      </div>
+      <div class="chip w-ms" title="Captura + codificação no PC remoto">
+        <span>Codif.</span><b>{stats?.encMs != null ? `${stats.encMs.toFixed(1)} ms` : '—'}</b>
+      </div>
+      <div class="chip w-ms" title="Da chegada do quadro ao desenho, aqui">
+        <span>Decod.</span><b>{stats?.decMs != null ? `${stats.decMs.toFixed(1)} ms` : '—'}</b>
+      </div>
     </dl>
   </header>
 
@@ -346,6 +332,7 @@
     display: flex;
     align-items: center;
     flex-wrap: nowrap;
+    overflow: hidden; /* janela estreita demais: corta, sem pular de linha */
     gap: 10px;
     height: 48px;
     padding: 0 16px;
@@ -382,7 +369,7 @@
   }
   select.wide {
     flex: 0 1 auto;
-    min-width: 150px;
+    min-width: 140px;
     max-width: 270px;
   }
   .back {
@@ -406,7 +393,7 @@
 
   .machine {
     flex: 0 1 auto;
-    min-width: 96px; /* o nome e o "conectado" nunca somem */
+    min-width: 90px; /* o nome e o "conectado" nunca somem */
     display: flex;
     flex-direction: column;
     gap: 1px;
@@ -450,48 +437,46 @@
     color: var(--bad);
   }
 
-  /* telemetria: chips verticais compactos, à direita, no espaço que sobra
-   * da barra. Ela nunca quebra para uma segunda linha (atrás da tela remota,
-   * ficava invisível inteira): sem espaço, somem os chips de prioridade 3,
-   * depois os de 2, e o resto é cortado pela direita, do menos importante. */
+  /* telemetria: uma faixa fixa à direita. Os campos são sempre os mesmos e
+   * cada um tem largura fixa, com números de largura igual: nada muda de
+   * lugar quando os valores mudam ou quando um dado chega. */
   .telemetry {
-    flex: 1 0 400px; /* o mínimo do Codec, Resolução, FPS, Banda e RTT */
-    min-width: 0;
-    overflow: hidden;
-    container: telemetria / inline-size;
+    flex: none;
+    margin: 0 0 0 auto;
     display: flex;
     align-items: center;
-    gap: 16px;
-    margin: 0;
+    gap: 12px;
     padding: 0;
     font-family: var(--mono);
+    font-variant-numeric: tabular-nums;
   }
-  .telemetry .chip:first-child {
-    margin-left: auto; /* cabe: encosta à direita; não cabe: corta o fim */
+  .telemetry .chip {
+    display: flex;
+    flex-direction: column;
+    align-items: flex-end;
+    gap: 1px;
+    white-space: nowrap;
+    overflow: hidden;
   }
-  .telemetry .codec {
-    display: block;
-    max-width: 150px;
+  .telemetry .chip b {
+    max-width: 100%;
     overflow: hidden;
     text-overflow: ellipsis;
   }
-  /* mesma especificidade de ".telemetry .chip" (display: flex), senão ela
-   * ganha: a consulta de container não soma especificidade */
-  @container telemetria (max-width: 650px) {
-    .telemetry .chip.p3 {
-      display: none;
-    }
+  .w-codec {
+    width: 112px;
   }
-  @container telemetria (max-width: 450px) {
-    .telemetry .chip.p2 {
-      display: none;
-    }
+  .w-res {
+    width: 70px;
   }
-  /* abaixo disso, o nome do codec encurta antes de a Banda e o RTT saírem */
-  @container telemetria (max-width: 390px) {
-    .telemetry .codec {
-      max-width: 72px;
-    }
+  .w-fps {
+    width: 28px;
+  }
+  .w-mbps {
+    width: 70px;
+  }
+  .w-ms {
+    width: 50px;
   }
   .c444 {
     width: auto;
@@ -612,27 +597,21 @@
     pointer-events: none;
   }
 
-  /* telas estreitas: a telemetria vai para uma linha própria (rola se
-   * precisar), em vez de espremer a barra ou ser cortada */
-  @media (max-width: 1100px) {
+  /* celular: o nome da máquina também ganha uma linha */
+  @media (max-width: 760px) {
     .bar {
       height: auto;
       flex-wrap: wrap;
       padding: 8px 14px;
     }
-    .telemetry {
-      margin-left: 0;
-      order: 2;
-      flex: 1 1 100%;
-      overflow-x: auto;
-      padding-top: 4px;
-    }
-  }
-  /* celular: o nome da máquina também ganha uma linha */
-  @media (max-width: 760px) {
     .machine {
       flex-basis: 100%;
       order: 1;
+    }
+    .telemetry {
+      order: 2;
+      margin-left: 0;
+      overflow-x: auto;
     }
   }
 </style>

@@ -88,6 +88,12 @@ test('a telemetria cabe na barra com o stats de produção', async ({ page }) =>
   }
   // o nome comprido do encoder fica na dica; no chip, o codec
   await expect(page.locator('.stats .codec')).toHaveText('H.264 4:4:4 GPU');
+  // a barra é fixa: os campos não mudam de lugar quando os valores mudam
+  const before = await page.locator('.stats .chip').evaluateAll((cs) => cs.map((c) => c.getBoundingClientRect().x));
+  await page.waitForTimeout(2500);
+  const after = await page.locator('.stats .chip').evaluateAll((cs) => cs.map((c) => c.getBoundingClientRect().x));
+  expect(after).toEqual(before);
+  await page.locator('header.bar').screenshot({ path: 'test-results/barra-1280.png' });
 });
 
 test('admin vê a tela remota da máquina', async ({ page }) => {

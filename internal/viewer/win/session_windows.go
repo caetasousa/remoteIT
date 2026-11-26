@@ -935,21 +935,22 @@ func (w *sessionWin) paintBar(hdc uintptr, bar rect) {
 		return
 	}
 	right := bar.Right - px(14)
-	if hint != "" {
-		hw := textWidth(hdc, hint, w.app.fontSmall)
-		drawString(hdc, rect{right - hw, bar.Top, right, bar.Bottom}, hint, w.app.fontSmall, colorWarn, dtRight)
-		right -= hw + px(20)
-	}
+	// cada segmento num espaço de largura fixa (o maior valor esperado): a
+	// barra não muda de lugar quando os valores mudam
 	for _, sg := range ui.Telemetry(st, drawn, local) {
 		lw := textWidth(hdc, sg.Label, w.app.fontSmall)
-		vw := textWidth(hdc, sg.Value, w.app.fontMono)
+		vw := max(textWidth(hdc, sg.Wide, w.app.fontMono), textWidth(hdc, sg.Value, w.app.fontMono))
 		if x+lw+px(6)+vw > right {
-			break // janela estreita: mostra o que couber
+			break // janela estreita: mostra o que couber, sempre a partir do começo
 		}
 		drawString(hdc, rect{x, bar.Top, x + lw, bar.Bottom}, sg.Label, w.app.fontSmall, colorMuted, dtLeft)
 		x += lw + px(6)
 		drawString(hdc, rect{x, bar.Top, x + vw, bar.Bottom}, sg.Value, w.app.fontMono, levelColor(sg.Level), dtLeft)
-		x += vw + px(18)
+		x += vw + px(16)
+	}
+	// o motivo do 4:4:4 inativo vai no que sobrar à direita, sem empurrar nada
+	if hint != "" && right-x > px(40) {
+		drawString(hdc, rect{x, bar.Top, right, bar.Bottom}, hint, w.app.fontSmall, colorWarn, dtRight)
 	}
 }
 

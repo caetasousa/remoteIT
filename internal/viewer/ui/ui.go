@@ -120,6 +120,9 @@ type Segment struct {
 	Label string // rótulo pequeno ("RTT")
 	Value string // valor ("132 ms")
 	Level Level
+	// Wide é o maior valor esperado: a barra reserva essa largura, para os
+	// segmentos não mudarem de lugar quando os valores mudam
+	Wide string
 }
 
 // Codec separa o nome do encoder que o agente manda ("H.264 4:4:4 GPU:
@@ -165,7 +168,9 @@ type Local struct {
 }
 
 // Telemetry monta a barra da sessão a partir do stats do agente (1x/s),
-// dos quadros que este PC desenhou no último segundo e do que ele mede.
+// dos quadros que este PC desenhou no último segundo e do que ele mede. Os
+// segmentos são sempre os mesmos, na mesma ordem ("—" sem dado): a barra
+// não pula nem muda de lugar.
 func Telemetry(st protocol.Stats, drawn int, l Local) []Segment {
 	codec, _ := Codec(st.Encoder)
 	if codec == "" {
@@ -179,29 +184,29 @@ func Telemetry(st protocol.Stats, drawn int, l Local) []Segment {
 	if l.GPUDecode {
 		dec = "GPU"
 	}
-	segs := []Segment{
-		{"Codec", codec, lvl},
-		{"Decodifica", dec, Normal},
-		{"Resolução", fmt.Sprintf("%d×%d", st.W, st.H), Normal},
-		{"FPS", fmt.Sprintf("%d", drawn), FPSLevel(drawn)},
-		{"Banda", fmt.Sprintf("%.1f Mbps", float64(st.Kbps)/1000), Normal},
-		{"RTT", RTTText(st.RTTms), RTTLevel(st.RTTms)},
+	fila, filaLvl := "—", Muted
+	if q := Queue(st); q >= 0 && st.RTTms > 0 {
+		fila, filaLvl = fmt.Sprintf("%d ms", q), QueueLevel(q)
 	}
-	if q := Queue(st); q >= 0 {
-		segs = append(segs, Segment{"Fila", fmt.Sprintf("%d ms", q), QueueLevel(q)})
-	}
+	codif := "—"
 	if st.EncodeUs > 0 {
-		segs = append(segs, Segment{"Codif.", MsText(st.EncodeUs), Normal})
+		codif = MsText(st.EncodeUs)
 	}
+	decod := "—"
 	if l.DecodeUs > 0 {
-		segs = append(segs, Segment{"Decod.", MsText(l.DecodeUs), Normal})
+		decod = MsText(l.DecodeUs)
 	}
-	// a rota só aparece quando é a local: pela internet é o normal, e a
-	// barra precisa do espaço (o Diagnóstico mostra sempre)
-	if l.Route == "local" {
-		segs = append(segs, Segment{"Rota", "local", Good})
+	return []Segment{
+		{"Codec", codec, lvl, "H.264 4:4:4 GPU"},
+		{"Decodifica", dec, Normal, "GPU"},
+		{"Resolução", fmt.Sprintf("%d×%d", st.W, st.H), Normal, "3840×2160"},
+		{"FPS", fmt.Sprintf("%d", drawn), FPSLevel(drawn), "144"},
+		{"Banda", fmt.Sprintf("%.1f Mbps", float64(st.Kbps)/1000), Normal, "99.9 Mbps"},
+		{"RTT", RTTText(st.RTTms), RTTLevel(st.RTTms), "999 ms"},
+		{"Fila", fila, filaLvl, "999 ms"},
+		{"Codif.", codif, Normal, "99,9 ms"},
+		{"Decod.", decod, Normal, "99,9 ms"},
 	}
-	return segs
 }
 
 // Queue é quanto os quadros esperam em fila no caminho (RTT menos o menor

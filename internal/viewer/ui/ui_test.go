@@ -57,26 +57,28 @@ func TestTelemetry(t *testing.T) {
 		RTTMin: 45, EncodeUs: 4200}
 	seg := Telemetry(st, 57, Local{GPUDecode: true, GPUDraw: true, DecodeUs: 1800, Route: "local"})
 	want := []Segment{
-		{"Codec", "H.264 4:4:4 GPU", Accent}, {"Decodifica", "GPU", Normal}, {"Resolução", "1920×1080", Normal},
-		{"FPS", "57", Good}, {"Banda", "12.4 Mbps", Normal}, {"RTT", "132 ms", Warn},
-		{"Fila", "87 ms", Bad}, {"Codif.", "4,2 ms", Normal}, {"Decod.", "1,8 ms", Normal}, {"Rota", "local", Good},
+		{"Codec", "H.264 4:4:4 GPU", Accent, ""}, {"Decodifica", "GPU", Normal, ""}, {"Resolução", "1920×1080", Normal, ""},
+		{"FPS", "57", Good, ""}, {"Banda", "12.4 Mbps", Normal, ""}, {"RTT", "132 ms", Warn, ""},
+		{"Fila", "87 ms", Bad, ""}, {"Codif.", "4,2 ms", Normal, ""}, {"Decod.", "1,8 ms", Normal, ""},
 	}
 	if len(seg) != len(want) {
 		t.Fatalf("segmentos = %+v", seg)
 	}
 	for i := range want {
-		if seg[i] != want[i] {
+		got := seg[i]
+		got.Wide = ""
+		if got != want[i] {
 			t.Errorf("segmento %d = %+v, want %+v", i, seg[i], want[i])
 		}
-	}
-	if s := Telemetry(protocol.Stats{Encoder: "JPEG"}, 0, Local{}); s[0].Value != "JPEG" || s[0].Level != Normal || s[3].Level != Muted {
-		t.Errorf("JPEG: %+v", s)
-	}
-	// agente antigo (sem o RTT mínimo): sem o segmento da fila
-	for _, s := range Telemetry(protocol.Stats{Encoder: "H.264 GPU: x", RTTms: 100}, 30, Local{}) {
-		if s.Label == "Fila" || s.Label == "Codif." || s.Label == "Rota" {
-			t.Errorf("segmento %q sem dado para ele", s.Label)
+		if seg[i].Wide == "" {
+			t.Errorf("segmento %q sem largura reservada", seg[i].Label)
 		}
+	}
+	// sem dado (agente antigo, JPEG): os mesmos segmentos, com "—", para a
+	// barra não mudar de forma
+	old := Telemetry(protocol.Stats{Encoder: "JPEG"}, 0, Local{})
+	if len(old) != len(want) || old[0].Value != "JPEG" || old[3].Level != Muted || old[6].Value != "—" || old[7].Value != "—" {
+		t.Errorf("sem dado: %+v", old)
 	}
 }
 
