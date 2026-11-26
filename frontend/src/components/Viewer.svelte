@@ -229,7 +229,7 @@
 
 <section>
   <header class="bar">
-    <button class="back" onclick={onBack} title="Voltar">← Voltar</button>
+    <button class="back" onclick={onBack} title="Voltar">←<span class="lbl">Voltar</span></button>
     <span class="sep" aria-hidden="true"></span>
 
     <div class="machine">
@@ -272,7 +272,7 @@
       <span aria-hidden="true">🔒</span><span class="sr-only">Bloquear tela</span>
     </button>
     <button class="wide primary" onclick={enterFullscreen} title="Tela cheia: captura Win, Alt+Tab etc.">
-      <span aria-hidden="true">⛶</span> Tela cheia
+      <span aria-hidden="true">⛶</span><span class="lbl">Tela cheia</span>
     </button>
 
     <!-- telemetria fixa: sempre os mesmos campos, cada um com largura fixa
@@ -373,6 +373,7 @@
     max-width: 270px;
   }
   .back {
+    gap: 6px;
     padding: 0 12px;
     font-family: var(--sans);
   }
@@ -597,6 +598,35 @@
     pointer-events: none;
   }
 
+  /* notebook (até 1300 px, inclusive 1366 com escala de 125%): Voltar e Tela
+   * cheia só com o ícone, seleção mais estreita e campos mais juntos, para a
+   * telemetria inteira caber na linha. Depende só da largura da janela: não
+   * muda enquanto se usa. */
+  @media (max-width: 1300px) {
+    .lbl {
+      position: absolute;
+      width: 1px;
+      height: 1px;
+      overflow: hidden;
+      clip-path: inset(50%);
+      white-space: nowrap;
+    }
+    .back,
+    .wide.primary {
+      width: 32px;
+      padding: 0;
+    }
+    select.wide {
+      min-width: 120px;
+      max-width: 170px;
+    }
+    .bar {
+      gap: 8px;
+    }
+    .telemetry {
+      gap: 10px;
+    }
+  }
   /* celular: o nome da máquina também ganha uma linha */
   @media (max-width: 760px) {
     .bar {

@@ -298,7 +298,8 @@ ficar desalinhado:
   (Codec, Resolução, FPS, Banda, RTT, Fila, Codif., Decod.), cada um com largura fixa e números de
   largura igual, com "—" enquanto não há dado. Nada aparece, some ou muda de lugar a cada segundo.
   Numa janela estreita demais, a barra corta à direita em vez de quebrar a linha (a segunda linha
-  ficava atrás da tela remota).
+  ficava atrás da tela remota). Até 1300 px (notebook com escala), Voltar e Tela cheia ficam só
+  com o ícone e a seleção mais estreita, para os oito campos caberem a partir de ~1090 px.
 - O chip Codec mostra o nome curto ("H.264 4:4:4 GPU"); o nome do encoder, que pode ser enorme
   ("Intel® Quick Sync Video H.264 Encoder MFT"), fica na dica. A rota não aparece na barra (em produção é sempre pelo domínio).
 - `data-testid="viewer-status"` e `data-testid="screen"` são usados pelos testes e não podem sumir.
