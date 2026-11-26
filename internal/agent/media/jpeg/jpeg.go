@@ -9,32 +9,32 @@ package jpeg
 import (
 	"bytes"
 	"hash/fnv"
-	"image"
 	"image/jpeg"
 	"time"
 
 	"remoteit/internal/agent/media"
 	"remoteit/internal/agent/media/capture"
 	"remoteit/internal/protocol"
+	"remoteit/internal/scale"
 )
 
 type source struct {
-	cap     capture.Capturer
-	maxw    int
-	quality int
-	last    uint64
-	buf     bytes.Buffer
+	cap        capture.Capturer
+	maxw, maxh int
+	quality    int
+	last       uint64
+	buf        bytes.Buffer
 }
 
-// New cria a fonte JPEG. maxw > 0 reduz a largura da imagem; kbps define a
-// qualidade inicial (veja SetBitrate).
-func New(maxw, kbps int) (media.Source, error) {
+// New abre a captura de tela com saída JPEG, reduzida para caber em
+// p.MaxW x p.MaxH (internal/scale).
+func New(p media.Params) (media.Source, error) {
 	c, err := capture.New()
 	if err != nil {
 		return nil, err
 	}
-	s := &source{cap: c, maxw: maxw}
-	s.SetBitrate(kbps)
+	s := &source{cap: c, maxw: p.MaxW, maxh: p.MaxH}
+	s.SetBitrate(p.Kbps)
 	return s, nil
 }
 
@@ -52,8 +52,9 @@ func (s *source) Next(timeout time.Duration, flags int) (*media.Frame, error) {
 		time.Sleep(timeout)
 		return nil, nil
 	}
-	if s.maxw > 0 && img.Bounds().Dx() > s.maxw {
-		img = downscale(img, s.maxw)
+	b := img.Bounds()
+	if w, h := scale.Fit(b.Dx(), b.Dy(), s.maxw, s.maxh); w != b.Dx() || h != b.Dy() {
+		img = scale.Area(img, w, h)
 	}
 	h := fnv.New64a()
 	h.Write(img.Pix)
@@ -67,22 +68,6 @@ func (s *source) Next(timeout time.Duration, flags int) (*media.Frame, error) {
 	if err := jpeg.Encode(&s.buf, img, &jpeg.Options{Quality: s.quality}); err != nil {
 		return nil, err
 	}
-	b := img.Bounds()
+	b = img.Bounds()
 	return &media.Frame{Codec: protocol.CodecJPEG, Keyframe: true, W: b.Dx(), H: b.Dy(), Data: bytes.Clone(s.buf.Bytes())}, nil
-}
-
-// downscale reduz por vizinho mais próximo: barato e suficiente para a tela.
-func downscale(src *image.RGBA, w int) *image.RGBA {
-	sw, sh := src.Bounds().Dx(), src.Bounds().Dy()
-	h := sh * w / sw
-	dst := image.NewRGBA(image.Rect(0, 0, w, h))
-	for y := range h {
-		sy := y * sh / h
-		for x := range w {
-			sx := x * sw / w
-			si, di := sy*src.Stride+sx*4, y*dst.Stride+x*4
-			copy(dst.Pix[di:di+4], src.Pix[si:si+4])
-		}
-	}
-	return dst
 }

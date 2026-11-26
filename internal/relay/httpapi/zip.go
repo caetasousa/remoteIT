@@ -44,7 +44,7 @@ depois. Para remover: Painel de Controle > Serviços, ou peça ao técnico.
 2. Dê dois cliques em remoteit-tecnico.exe e entre com a mesma conta do
    console. O endereço do relay já vem preenchido.
 
-Ele se atualiza sozinho. Guia: docs/VISUALIZADOR.md no repositório.
+Ele se atualiza sozinho. Guia: docs/WINDOWS.md no repositório.
 `,
 }
 

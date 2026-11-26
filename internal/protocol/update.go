@@ -6,7 +6,7 @@ import (
 	"errors"
 )
 
-// Atualização automática do agente (docs/adr/0011-atualizacao-automatica.md).
+// Atualização automática do agente (docs/DECISOES.md, ADR 0011).
 //
 // O build.sh publica, junto dos .exe, um manifesto (update.json) com a versão
 // e, para cada edição, o SHA-256 do .exe e uma assinatura Ed25519 de

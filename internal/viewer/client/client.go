@@ -2,7 +2,7 @@
 // (cmd/viewer): login, lista de máquinas e a sessão de tela remota.
 //
 // É a mesma API e o mesmo protocolo do console no navegador
-// (docs/API.md, docs/PROTOCOLO.md), sem nada de Windows: por isso é testado no
+// (docs/ARQUITETURA.md: API e protocolo), sem nada de Windows: por isso é testado no
 // Linux contra o relay e o agente de verdade (test/integration). A janela, o
 // decodificador e o teclado ficam em internal/viewer/win.
 package client

@@ -19,8 +19,10 @@ graph LR
 | | Funcionalidade | Quem |
 |---|---|:---:|
 | 👀 | **Ver e controlar** a tela remota: mouse, teclado (com acentos), roda, Ctrl+Shift+Esc | técnico |
-| ⚡ | **Vídeo H.264 na GPU** (NVENC, Intel QSV, AMD AMF) decodificado pelo navegador; **AV1** em placas novas; **cor 4:4:4** no visualizador do técnico; JPEG quando não há GPU. O codec é negociado e cai sozinho para o próximo se falhar | [ADR 0013](docs/adr/0013-codecs-e-negociacao.md) |
-| 🎚️ | **Trocar a qualidade** sem reconectar (Ultra-rápido, Equilibrado, Nítido, Máximo) e ver codec, resolução, FPS, banda e RTT | técnico |
+| ⚡ | **Vídeo H.264 na GPU** (NVENC, Intel QSV, AMD AMF) decodificado pelo navegador; **AV1** em placas novas; **cor 4:4:4** no visualizador e no console; JPEG quando não há GPU. O codec é negociado e cai sozinho para o próximo se falhar | [ADR 0013](docs/DECISOES.md#adr-0013) |
+| 🔍 | **Partes paradas da tela sem perda**: o vídeo só pinta o que mudou, e o resto recebe uma cópia exata em ~0,3 s; o vídeo vem do tamanho da janela do técnico | [ADR 0014](docs/DECISOES.md#adr-0014) |
+| 🏠 | **Relay em casa sem a volta pela internet**: no PC do relay, o visualizador abre a tela pelo endereço local | [ADR 0014](docs/DECISOES.md#adr-0014) |
+| 🎚️ | **Trocar a qualidade** sem reconectar (Ultra-rápido, Equilibrado, Nítido, Máximo) e ver codec, resolução, FPS, banda, RTT, fila, tempos de codificação e decodificação e a rota | técnico |
 | 🖵 | **Tela cheia** capturando Win, Alt+Tab e afins (Keyboard Lock API) | técnico |
 | 🔒 | **Bloquear a tela** remota (como Win+L) e **logar com outra conta** do Windows | técnico |
 | 🛡️ | **Tela de login e de bloqueio** acessíveis no modo serviço | — |
@@ -45,7 +47,7 @@ No console há dois botões de download. É o **mesmo programa**, com o comporta
 | ▶️ **Executar agente** | `suporte-ti.exe` | roda na hora, na sessão do usuário; sair da sessão encerra | ❌ | ❌ |
 | 🧩 **Instalar como serviço** | `suporte-ti-servico.exe` | instala (ou atualiza) um serviço do Windows que sobe junto com o PC | ✅ (UAC) | ✅ |
 
-> 💡 **Nenhuma das duas mostra caixa de mensagem.** Usuário raramente lê aviso e costuma achar que é defeito. O resultado da instalação fica em `C:\ProgramData\RemoteIT\service.log`. Atualização, remoção e solução de problemas: **[docs/AGENTE-WINDOWS.md](docs/AGENTE-WINDOWS.md)**.
+> 💡 **Nenhuma das duas mostra caixa de mensagem.** Usuário raramente lê aviso e costuma achar que é defeito. O resultado da instalação fica em `C:\ProgramData\RemoteIT\service.log`. Atualização, remoção e solução de problemas: **[docs/WINDOWS.md](docs/WINDOWS.md#agente)**.
 
 ---
 
@@ -149,7 +151,7 @@ sequenceDiagram
     R->>R: grava o fim na auditoria
 ```
 
-* 🚦 **Controle de fluxo:** o navegador confirma cada quadro, e o agente só deixa alguns quadros sem confirmação no caminho (**2** em rede local, até **8** com internet lenta, para não travar em poucos quadros por segundo). Isso evita fila nos buffers do TCP, a principal causa de atraso em acesso remoto. O bitrate cai 25% quando congestiona e sobe 10% por segundo quando a rede está livre.
+* 🚦 **Controle de fluxo:** o navegador confirma cada quadro, e o agente só deixa alguns quadros sem confirmação no caminho (**2** em rede local, até **8** com internet lenta, para não travar em poucos quadros por segundo), e nenhum esperando mais que o RTT mínimo + 50 ms. Isso evita fila nos buffers do TCP, a principal causa de atraso em acesso remoto. O bitrate segue a fila: cai 25% quando ela passa de 80 ms e sobe 20% por segundo quando a banda foi usada sem fila.
 * 🔐 **Sem auditoria não há acesso:** se o banco falhar ao registrar o início, o relay recusa a conexão do técnico.
 * 🙋 **Consentimento:** por padrão o usuário do PC aprova cada acesso; o build com `NO_CONSENT=1` dispensa a pergunta (a auditoria continua).
 
@@ -164,17 +166,13 @@ sequenceDiagram
 | Eu quero... | Leia |
 |---|---|
 | 🧭 **entender cada fluxo** (conexão, vídeo, teclado, tela de bloqueio, contas) | [docs/FLUXOS.md](docs/FLUXOS.md) |
-| 🖥️ usar o **visualizador do técnico** (Windows) | [docs/VISUALIZADOR.md](docs/VISUALIZADOR.md) |
-| 🖥️ **instalar, atualizar ou remover** o agente e resolver problemas no Windows | [docs/AGENTE-WINDOWS.md](docs/AGENTE-WINDOWS.md) |
-| 🏗️ entender **como o código está organizado** | [docs/ARQUITETURA.md](docs/ARQUITETURA.md) |
-| 📡 ver **as mensagens** entre agente, relay e navegador | [docs/PROTOCOLO.md](docs/PROTOCOLO.md) |
-| 🔌 chamar a **API HTTP** do console | [docs/API.md](docs/API.md) |
+| 🪟 **instalar, usar, atualizar ou remover** o agente e o visualizador do técnico, e resolver problemas no Windows | [docs/WINDOWS.md](docs/WINDOWS.md) |
+| 🏗️ entender **como o código está organizado**, **as mensagens** entre agente, relay e técnico e **a API HTTP** | [docs/ARQUITETURA.md](docs/ARQUITETURA.md) |
+| 📝 saber **por que** cada decisão foi tomada (ADRs) | [docs/DECISOES.md](docs/DECISOES.md) |
 | ☁️ **publicar no servidor** | [docs/DEPLOY.md](docs/DEPLOY.md) |
 | 🛡️ ver **as defesas de segurança** e os riscos conhecidos | [docs/SEGURANCA.md](docs/SEGURANCA.md) |
-| 🧪 saber **como o projeto é testado** | [docs/TESTES.md](docs/TESTES.md) |
-| 🎨 conhecer **o design do console** | [docs/DESIGN.md](docs/DESIGN.md) |
-| 📝 saber **por que** cada decisão foi tomada | [docs/adr/](docs/adr/README.md) |
-| 🤝 **contribuir** | [CONTRIBUTING.md](CONTRIBUTING.md) · [CHANGELOG.md](CHANGELOG.md) |
+| 🗺️ ver **o que já foi feito e o que falta** | [docs/ROADMAP.md](docs/ROADMAP.md) |
+| 🤝 **contribuir**, saber **como o projeto é testado** e conhecer **o design do console** | [CONTRIBUTING.md](CONTRIBUTING.md) · [CHANGELOG.md](CHANGELOG.md) |
 
 ---
 
@@ -191,7 +189,7 @@ remoteIT/
 │   └── relay/            🔀 hub, identidade, auditoria, API, Postgres, e-mail
 ├── 📁 frontend/          🎨 console Svelte (src/) e testes E2E (e2e/)
 ├── 📁 test/integration/  🧪 relay + agente + Postgres reais
-├── 📁 docs/              📚 documentação detalhada e ADRs
+├── 📁 docs/              📚 documentação detalhada e as decisões (DECISOES.md)
 ├── 🐳 Dockerfile         build multi-stage (console + relay; agente Windows opcional)
 ├── 🐳 compose.yaml       relay + PostgreSQL (+ túnel opcional)
 ├── 🔧 build.sh           gera dist/: os dois .exe do agente e o relay
@@ -210,7 +208,7 @@ make test-integration  # 🐘 relay + agente + PostgreSQL reais (Docker)
 make test-e2e          # 🌐 navegador real (Playwright) contra o compose (Docker)
 ```
 
-👉 O que cada camada cobre e o checklist manual no Windows: [docs/TESTES.md](docs/TESTES.md).
+👉 O que cada camada cobre e o checklist manual no Windows: [CONTRIBUTING.md](CONTRIBUTING.md#testes).
 
 ---
 
@@ -218,12 +216,12 @@ make test-e2e          # 🌐 navegador real (Playwright) contra o compose (Dock
 
 * 🛡️ **Sem o modo serviço**, não controla janelas elevadas (UAC) nem a tela de bloqueio: o Windows não deixa um programa comum mexer nelas. A sessão mostra "tela protegida" e retoma sozinha.
 * 🖵 Só o **monitor principal**; área de transferência só em texto, do técnico para o PC e pelo visualizador nativo; sem arquivos nem áudio.
-* 🎨 No navegador, com a tela em movimento, a cor fica em meia resolução (H.264 4:2:0); com a tela parada, o refresh de nitidez deixa a imagem idêntica à do PC. No visualizador do técnico a cor vem completa (4:4:4) também em movimento, na resolução nativa.
+* 🎨 Cor completa (4:4:4) com a tela em movimento: no visualizador do técnico, e no console quando o navegador tem WebGL2 e o PC dá conta de decodificar em software; senão, em movimento a cor fica em meia resolução (H.264 4:2:0). As partes paradas da tela ficam idênticas às do PC em qualquer caso.
 * ⌨️ **Ctrl+Alt+Del** não pode ser simulado (o Windows reserva essa combinação). Se a política do PC exigir Ctrl+Alt+Del antes do login, o login remoto para nessa tela.
 * 🌐 Proxy: respeita `HTTP_PROXY`/`HTTPS_PROXY`; proxy autenticado ou PAC do Windows, ainda não.
 * 🏚️ Agentes antigos (de antes do cadastro por máquina) são **recusados** em produção (`RELAY_LEGACY_AGENTS=false`); reinstale com um agente baixado do console.
-* 🧾 O `.exe` **não é assinado**: SmartScreen e antivírus podem bloquear (veja [docs/AGENTE-WINDOWS.md](docs/AGENTE-WINDOWS.md#antivirus)).
-* ❓ **Por que não WebRTC?** Com só a 443 TCP liberada, o WebRTC cairia em TURN sobre TCP: o mesmo transporte, com muito mais complexidade ([ADR 0004](docs/adr/0004-websocket-sobre-tcp.md)).
+* 🧾 O `.exe` **não é assinado**: SmartScreen e antivírus podem bloquear (veja [docs/WINDOWS.md](docs/WINDOWS.md#antivirus)).
+* ❓ **Por que não WebRTC?** Com só a 443 TCP liberada, o WebRTC cairia em TURN sobre TCP: o mesmo transporte, com muito mais complexidade ([ADR 0004](docs/DECISOES.md#adr-0004)).
 
 > 📌 Projeto de estudo. Use só em máquinas suas ou com autorização e aviso aos usuários.
 

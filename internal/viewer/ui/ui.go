@@ -156,10 +156,17 @@ func FPSLevel(fps int) Level {
 	return Muted
 }
 
+// Local é o que este PC sabe da sessão (o resto vem do stats do agente).
+type Local struct {
+	GPUDecode bool   // decodificação na GPU (DXVA)
+	GPUDraw   bool   // desenho na GPU (Direct3D 11), não GDI
+	DecodeUs  int    // decodificação + desenho de um quadro, média do último segundo
+	Route     string // "local" (direto no PC do relay) ou "internet"
+}
+
 // Telemetry monta a barra da sessão a partir do stats do agente (1x/s),
-// dos quadros que este PC desenhou no último segundo e de onde ele
-// decodifica.
-func Telemetry(st protocol.Stats, drawn int, gpuDecode bool) []Segment {
+// dos quadros que este PC desenhou no último segundo e do que ele mede.
+func Telemetry(st protocol.Stats, drawn int, l Local) []Segment {
 	codec, _ := Codec(st.Encoder)
 	if codec == "" {
 		codec = "—"
@@ -169,10 +176,10 @@ func Telemetry(st protocol.Stats, drawn int, gpuDecode bool) []Segment {
 		lvl = Accent
 	}
 	dec := "CPU"
-	if gpuDecode {
+	if l.GPUDecode {
 		dec = "GPU"
 	}
-	return []Segment{
+	segs := []Segment{
 		{"Codec", codec, lvl},
 		{"Decodifica", dec, Normal},
 		{"Resolução", fmt.Sprintf("%d×%d", st.W, st.H), Normal},
@@ -180,6 +187,49 @@ func Telemetry(st protocol.Stats, drawn int, gpuDecode bool) []Segment {
 		{"Banda", fmt.Sprintf("%.1f Mbps", float64(st.Kbps)/1000), Normal},
 		{"RTT", RTTText(st.RTTms), RTTLevel(st.RTTms)},
 	}
+	if q := Queue(st); q >= 0 {
+		segs = append(segs, Segment{"Fila", fmt.Sprintf("%d ms", q), QueueLevel(q)})
+	}
+	if st.EncodeUs > 0 {
+		segs = append(segs, Segment{"Codif.", MsText(st.EncodeUs), Normal})
+	}
+	if l.DecodeUs > 0 {
+		segs = append(segs, Segment{"Decod.", MsText(l.DecodeUs), Normal})
+	}
+	if l.Route != "" {
+		lv := Muted
+		if l.Route == "local" {
+			lv = Good
+		}
+		segs = append(segs, Segment{"Rota", l.Route, lv})
+	}
+	return segs
+}
+
+// Queue é quanto os quadros esperam em fila no caminho (RTT menos o menor
+// RTT recente), em ms; -1 se o agente não informa (versão antiga).
+func Queue(st protocol.Stats) int64 {
+	if st.RTTMin <= 0 && st.RTTms > 0 {
+		return -1
+	}
+	return max(0, st.RTTms-st.RTTMin)
+}
+
+// QueueLevel dá o tom da fila: até 30 ms é normal (o controle de bitrate só
+// segura acima disso), até 80 ms começa a pesar.
+func QueueLevel(ms int64) Level {
+	switch {
+	case ms <= 30:
+		return Good
+	case ms <= 80:
+		return Warn
+	}
+	return Bad
+}
+
+// MsText mostra microssegundos como ms com uma casa ("4,2 ms").
+func MsText(us int) string {
+	return strings.Replace(fmt.Sprintf("%.1f ms", float64(us)/1000), ".", ",", 1)
 }
 
 // NativePreset informa se o preset é de resolução nativa (onde o 4:4:4 vale).
@@ -213,7 +263,7 @@ func Decoders(h264, av1 bool) string {
 }
 
 // Diagnostics é o texto de Ajuda ▸ Diagnóstico de vídeo.
-func Diagnostics(version string, h264, av1 bool, offered []string, st protocol.Stats, drawn int, preset string) string {
+func Diagnostics(version string, h264, av1 bool, offered []string, st protocol.Stats, drawn int, preset string, l Local) string {
 	codec, enc := Codec(st.Encoder)
 	if codec == "" {
 		codec, enc = "nenhum (sem vídeo ainda)", "—"
@@ -225,10 +275,30 @@ func Diagnostics(version string, h264, av1 bool, offered []string, st protocol.S
 	if !av1 {
 		b.WriteString("  (AV1 precisa da \"Extensão de Vídeo AV1\" da Microsoft Store)\n")
 	}
+	draw := "CPU (GDI)"
+	if l.GPUDraw {
+		draw = "GPU (Direct3D 11)"
+	}
+	fmt.Fprintf(&b, "Desenho: %s\n", draw)
 	fmt.Fprintf(&b, "Codecs pedidos ao agente: %s\n\n", strings.Join(offered, ", "))
 	fmt.Fprintf(&b, "Em uso: %s\nEncoder no PC remoto: %s\n", codec, enc)
-	fmt.Fprintf(&b, "Qualidade: %s\n%d×%d · %d fps desenhados (%d enviados) · %.1f Mbps · RTT %s\n",
-		PresetLabel(preset), st.W, st.H, drawn, st.FPS, float64(st.Kbps)/1000, RTTText(st.RTTms))
+	fmt.Fprintf(&b, "Qualidade: %s\n%d×%d · %d fps desenhados (%d enviados) · %.1f Mbps (alvo %.1f)\n",
+		PresetLabel(preset), st.W, st.H, drawn, st.FPS, float64(st.Kbps)/1000, float64(st.Target)/1000)
+	route := "pela internet"
+	if l.Route == "local" {
+		route = "direta, no PC do relay (sem a volta pela internet)"
+	}
+	fmt.Fprintf(&b, "\nRota: %s\nRTT %s", route, RTTText(st.RTTms))
+	if q := Queue(st); q >= 0 {
+		fmt.Fprintf(&b, " · sem fila %s · fila %d ms", RTTText(st.RTTMin), q)
+	}
+	b.WriteString("\n")
+	if st.EncodeUs > 0 {
+		fmt.Fprintf(&b, "Captura + codificação no PC remoto: %s por quadro\n", MsText(st.EncodeUs))
+	}
+	if l.DecodeUs > 0 {
+		fmt.Fprintf(&b, "Decodificação + desenho aqui: %s por quadro\n", MsText(l.DecodeUs))
+	}
 	return b.String()
 }
 

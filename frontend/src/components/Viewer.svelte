@@ -33,8 +33,19 @@
   const ZOOM_KEY = 'remoteit.zoom';
   let zoom = $state<Zoom>(localStorage.getItem(ZOOM_KEY) === 'real' ? 'real' : 'fit');
 
+  // Cor 4:4:4 (texto colorido nítido também em movimento): decodifica as
+  // duas visões em software e recompõe em WebGL. Ligada por padrão onde o
+  // navegador dá conta; lembrada entre sessões.
+  const COLOR_KEY = 'remoteit.color444';
+  let color444 = $state(localStorage.getItem(COLOR_KEY) !== 'off');
+  let can444 = $state(false);
+
   // o RTT é a leitura que mais pesa na sensação de controle: cor por faixa
   const rttLevel = $derived<StatusLevel>(!stats ? '' : stats.rtt < 80 ? 'ok' : stats.rtt < 200 ? 'warn' : 'bad');
+  // a fila é o atraso que o próprio vídeo causa: até 30 ms o controle de banda nem reage
+  const queueLevel = $derived<StatusLevel>(
+    !stats || stats.queue === null ? '' : stats.queue <= 30 ? 'ok' : stats.queue <= 80 ? 'warn' : 'bad',
+  );
 
   // Calcula tamanho e posição do canvas na tela. Mantém a caixa do <canvas>
   // igual à imagem, para o mapeamento de clique e cursor (que usa
@@ -70,6 +81,35 @@
     zoom = zoom === 'fit' ? 'real' : 'fit';
     localStorage.setItem(ZOOM_KEY, zoom);
     fitCanvas();
+    sendViewport();
+    canvas.focus();
+  }
+
+  // A área onde a tela aparece, em pixels físicos: o agente manda o vídeo
+  // nesse tamanho (no "Tamanho real", 0 x 0 = a resolução nativa). Assim uma
+  // tela 4K numa janela menor não manda 4x os pixels para o navegador jogar
+  // fora reduzindo — e reduzir lá, com um filtro bom, deixa o texto mais nítido.
+  function viewport(): [number, number] {
+    if (zoom === 'real' || !stage) return [0, 0];
+    const dpr = window.devicePixelRatio || 1;
+    return [Math.round(stage.clientWidth * dpr), Math.round(stage.clientHeight * dpr)];
+  }
+
+  function sendViewport() {
+    session?.setViewport(...viewport());
+  }
+
+  // ao redimensionar a janela, espera ela parar: reabrir o encoder custa um keyframe
+  let vpTimer: ReturnType<typeof setTimeout> | undefined;
+  function viewportLater() {
+    clearTimeout(vpTimer);
+    vpTimer = setTimeout(sendViewport, 400);
+  }
+
+  function toggle444() {
+    color444 = !color444;
+    localStorage.setItem(COLOR_KEY, color444 ? 'on' : 'off');
+    session.setColor444(color444);
     canvas.focus();
   }
 
@@ -110,13 +150,17 @@
       },
     });
     const detach = attachInput(canvas, (m) => session.send(m));
-    session.connect(agent.id, preset);
+    session.connect(agent.id, preset, ...viewport(), color444).then(() => (can444 = session.supports444));
     canvas.focus();
     // re-ajusta ao mudar o tamanho do palco (janela, tela cheia)
-    const ro = new ResizeObserver(fitCanvas);
+    const ro = new ResizeObserver(() => {
+      fitCanvas();
+      viewportLater();
+    });
     ro.observe(stage);
     const unwatchDpr = watchDpr();
     return () => {
+      clearTimeout(vpTimer);
       ro.disconnect();
       unwatchDpr();
       detach();
@@ -127,7 +171,7 @@
 
 
   function changePreset() {
-    session.send({ t: 'cfg', p: preset });
+    session.setPreset(preset);
     canvas.focus();
   }
 
@@ -191,6 +235,18 @@
     <select class="wide" bind:value={preset} onchange={changePreset} title="Qualidade" aria-label="Qualidade">
       {#each PRESETS as p (p.value)}<option value={p.value}>{p.label}</option>{/each}
     </select>
+    {#if can444}
+      <button
+        class="sq zoom"
+        onclick={toggle444}
+        aria-pressed={color444}
+        title={color444
+          ? 'Cor 4:4:4 ligada: texto colorido nítido também em movimento (usa mais a CPU deste PC)'
+          : 'Cor 4:4:4 desligada: cor em meia resolução enquanto a tela mexe'}
+      >
+        <span aria-hidden="true">4:4:4</span><span class="sr-only">Cor 4:4:4</span>
+      </button>
+    {/if}
     <button
       class="sq zoom"
       onclick={toggleZoom}
@@ -218,6 +274,29 @@
         <div class="chip"><span>FPS</span><b>{stats.fps}</b></div>
         <div class="chip"><span>Banda</span><b>{stats.mbps} Mbps</b></div>
         <div class="chip"><span>RTT</span><b class={rttLevel}>{stats.rtt} ms</b></div>
+        {#if stats.queue !== null}
+          <div class="chip" title="Quanto os quadros esperam em fila no caminho (RTT menos o RTT sem fila)">
+            <span>Fila</span><b class={queueLevel}>{stats.queue} ms</b>
+          </div>
+        {/if}
+        {#if stats.encMs !== null}
+          <div class="chip" title="Captura + codificação no PC remoto">
+            <span>Codif.</span><b>{stats.encMs.toFixed(1)} ms</b>
+          </div>
+        {/if}
+        {#if stats.decMs !== null}
+          <div class="chip" title="Da chegada do quadro ao desenho, aqui">
+            <span>Decod.</span><b>{stats.decMs.toFixed(1)} ms</b>
+          </div>
+        {/if}
+        <div
+          class="chip"
+          title={stats.route === 'local'
+            ? 'Aberto pelo endereço do próprio PC do relay: sem a volta pela internet'
+            : 'Pela internet. No PC do relay, abra pelo endereço local para cortar a volta'}
+        >
+          <span>Rota</span><b class={stats.route === 'local' ? 'ok' : 'muted'}>{stats.route}</b>
+        </div>
       {:else}
         <div class="chip"><span>Sinal</span><b class="muted">aguardando…</b></div>
       {/if}

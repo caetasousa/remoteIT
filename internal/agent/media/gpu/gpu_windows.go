@@ -10,6 +10,7 @@ import "C"
 
 import (
 	"errors"
+	"image"
 	"time"
 	"unsafe"
 
@@ -25,18 +26,18 @@ type source struct {
 
 // NewH264 abre captura + encoder H.264. Devolve [media.ErrReopen] quando o
 // desktop está em transição (UAC, tela de login) e vale tentar de novo.
-func NewH264(maxw, fps, kbps int) (media.Source, error) { return open(C.RC_H264, maxw, fps, kbps) }
+func NewH264(p media.Params) (media.Source, error) { return open(C.RC_H264, p) }
 
-// NewAVC444 abre captura + dois encoders H.264 de GPU, na resolução nativa.
-func NewAVC444(fps, kbps int) (media.Source, error) { return open(C.RC_AVC444, 0, fps, kbps) }
+// NewAVC444 abre captura + dois encoders H.264 de GPU (cor 4:4:4).
+func NewAVC444(p media.Params) (media.Source, error) { return open(C.RC_AVC444, p) }
 
 // NewAV1 abre captura + encoder AV1 de GPU.
-func NewAV1(maxw, fps, kbps int) (media.Source, error) { return open(C.RC_AV1, maxw, fps, kbps) }
+func NewAV1(p media.Params) (media.Source, error) { return open(C.RC_AV1, p) }
 
-func open(mode C.int, maxw, fps, kbps int) (media.Source, error) {
+func open(mode C.int, p media.Params) (media.Source, error) {
 	var c *C.rc_ctx
 	var buf [256]C.char
-	r := C.rc_open(&c, mode, C.int(maxw), C.int(fps), C.int(kbps), 1, &buf[0], C.int(len(buf)))
+	r := C.rc_open(&c, mode, C.int(p.MaxW), C.int(p.MaxH), C.int(p.FPS), C.int(p.Kbps), 1, &buf[0], C.int(len(buf)))
 	if r == C.RC_REOPEN {
 		return nil, media.ErrReopen
 	}
@@ -120,6 +121,64 @@ func (s *source) Name() string {
 }
 
 func (s *source) Close() { C.rc_close(s.c); s.c = nil }
+
+// Tiles implementa [media.TileSource].
+func (s *source) Tiles() (cols, rows, size int) {
+	var c, r, z C.int
+	C.rc_tiles(s.c, &c, &r, &z)
+	return int(c), int(r), int(z)
+}
+
+// Dirty implementa [media.TileSource].
+func (s *source) Dirty(dst []bool) {
+	cols, rows, _ := s.Tiles()
+	if len(dst) < cols*rows {
+		return
+	}
+	tmp := make([]byte, cols*rows)
+	C.rc_dirty(s.c, (*C.uint8_t)(unsafe.Pointer(&tmp[0])), C.int(len(tmp)))
+	for i, b := range tmp {
+		dst[i] = dst[i] || b != 0
+	}
+}
+
+// ReadStill implementa [media.StillReader]: lê da GPU a tela já no tamanho
+// do vídeo.
+func (s *source) ReadStill(r image.Rectangle) (*image.RGBA, error) {
+	img := image.NewRGBA(image.Rect(0, 0, r.Dx(), r.Dy()))
+	if r.Empty() || C.rc_still(s.c, C.int(r.Min.X), C.int(r.Min.Y), C.int(r.Dx()), C.int(r.Dy()),
+		(*C.uint8_t)(unsafe.Pointer(&img.Pix[0]))) != 0 {
+		return nil, errors.New("leitura da tela na GPU indisponível")
+	}
+	return img, nil
+}
+
+// EncodeTime implementa [media.EncodeTimer].
+func (s *source) EncodeTime() time.Duration {
+	return time.Duration(C.rc_encode_us(s.c)) * time.Microsecond
+}
+
+// SetSpeed implementa [media.SpeedTuner].
+func (s *source) SetSpeed(level int) bool { return C.rc_set_speed(s.c, C.int(level)) != 0 }
+
+// Native implementa [media.NativeSizer].
+func (s *source) Native() (w, h int) {
+	var cw, ch C.int
+	C.rc_native(s.c, &cw, &ch)
+	return int(cw), int(ch)
+}
+
+// scaleSelfTest reduz bgra (sw x sh) para dw x dh com o shader de redução e
+// devolve o resultado em BGRA. Só para o teste.
+func scaleSelfTest(sw, sh int, bgra []byte, dw, dh int) ([]byte, error) {
+	out := make([]byte, dw*dh*4)
+	var buf [512]C.char
+	if C.rc_scale_selftest(C.int(sw), C.int(sh), (*C.uint8_t)(unsafe.Pointer(&bgra[0])), C.int(dw), C.int(dh),
+		(*C.uint8_t)(unsafe.Pointer(&out[0])), &buf[0], C.int(len(buf))) != 0 {
+		return nil, errors.New(C.GoString(&buf[0]))
+	}
+	return out, nil
+}
 
 // avc444SelfTest roda os shaders do AVC444 sobre bgra (w x h) e devolve as
 // visões principal e auxiliar em NV12 contíguo. Só para o teste.

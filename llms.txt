@@ -15,29 +15,25 @@ em `internal/`.
 - **hub**: agentes online em memória; 1 técnico por agente; um técnico novo assume a sessão.
 - **identity / audit**: usuários, papéis, sessões; todo acesso é auditado, e sem auditoria não há acesso.
 - **contas**: `identity.Accounts` + `relay/mail`; conta nova fica pendente até um admin aprovar (ADR 0006).
-- **session / media**: no agente, consentimento antes de vídeo e input; controle de fluxo com 2 a 8 quadros sem ACK, conforme o RTT (media/flow.go).
+- **session / media**: no agente, consentimento antes de vídeo e input; controle de fluxo com 2 a 8 quadros sem ACK, conforme o RTT, e fila máxima de RTT mínimo + 50 ms (media/flow.go).
 - **storage/postgres**: único pacote com SQL; migrations em `migrations/*.sql`.
 - **update**: agente e visualizador se atualizam sozinhos; build.sh assina dist/update.json com chave Ed25519 do projeto (cmd/signupdate), o cliente confere assinatura e hash (ADR 0011).
 - **viewer**: visualizador nativo do técnico para Windows (cmd/viewer, internal/viewer/{client,decode,win}); mesmo protocolo do console, H.264/AVC444 (cor 4:4:4)/AV1 via Media Foundation, hook de teclado, mensagem `clip` (ADR 0012, 0013).
-- **codecs**: o hello leva `codecs` em ordem de preferência (avc444, av1, h264, jpeg); o agente (internal/agent/media/stream.go, encoders em internal/agent/media/gpu) abre o primeiro que conseguir; referência do 4:4:4 em internal/avc444 (ADR 0013).
+- **codecs**: o hello leva `codecs` em ordem de preferência (avc444, av1, h264, jpeg); o agente (internal/agent/media/stream.go, encoders em internal/agent/media/gpu) abre o primeiro que conseguir; referência do 4:4:4 em internal/avc444 (ADR 0013); o console recompõe o 4:4:4 em WebGL (frontend/src/lib/viewer/render.ts).
+- **qualidade e latência** (ADR 0014): cfg leva a área do técnico (vw, vh) e o agente reduz pela média da área (internal/scale, shader em rcenc.h); blocos de 64 px (media/tiles.go) e retalhos PNG sem perda (media/still.go, codec 6) com a mensagem rg (onde o vídeo vale); bitrate pela fila (media/rate.go); rota local do visualizador (RELAY_LOCAL_URL, /api/relay, /api/viewer/route); desenho na GPU do visualizador (internal/viewer/render, D3D11).
 - **machines / agentbin / agent/machine**: cada máquina tem dono (quem baixou o .exe, marcado com um código de cadastro no download), credencial própria; acessam só o dono e os admins (ADR 0010). Links de instalação podem ser permanentes.
 - **lifecycle / desktop**: duas edições do agente (`main.edition`): portátil e serviço. O serviço lança o worker como SYSTEM na sessão do console, e captura e entrada seguem o desktop ativo (Default/Winlogon). Nada abre janela; logs em %ProgramData%\RemoteIT (ADRs 0007 e 0008).
 
 ## Docs
 
 - Fluxos (diagramas de sequência de tudo): docs/FLUXOS.md
-- Visualizador do técnico (Windows): docs/VISUALIZADOR.md
-- Melhorias (levantamento e situação): docs/MELHORIAS.md
-- Agente no Windows (edições, instalar, logs, problemas): docs/AGENTE-WINDOWS.md
-- Arquitetura: docs/ARQUITETURA.md
-- Decisões (ADRs): docs/adr/README.md
-- Protocolo: docs/PROTOCOLO.md
-- API HTTP: docs/API.md
+- Windows (agente: edições, instalar, logs, problemas; visualizador do técnico): docs/WINDOWS.md
+- Arquitetura, protocolo WebSocket e API HTTP: docs/ARQUITETURA.md
+- Decisões (ADRs 0001-0013, uma seção cada, âncoras #adr-NNNN): docs/DECISOES.md
 - Segurança: docs/SEGURANCA.md
-- Design do console: docs/DESIGN.md
-- Testes: docs/TESTES.md
 - Deploy: docs/DEPLOY.md
-- Contribuição: CONTRIBUTING.md
+- Roadmap (feito e a fazer): docs/ROADMAP.md
+- Contribuição, testes e design do console: CONTRIBUTING.md
 
 ## Commands
 

@@ -70,7 +70,7 @@
 | ⌨️ Ctrl+Alt+Del | o Windows reserva a combinação; o agente não tenta contorná-la |
 | 🔇 Sem janelas | nada pede ao usuário para clicar em "OK" sem ler; o resultado fica em log |
 
-### 🖥️ Máquinas e agentes ([ADR 0010](adr/0010-maquinas-por-tecnico.md))
+### 🖥️ Máquinas e agentes ([ADR 0010](DECISOES.md#adr-0010))
 
 | Defesa | Detalhe | Onde |
 |---|---|---|
@@ -83,7 +83,7 @@
 | 🔗 **Links revogáveis** | validade de 1 hora a 7 dias ou sem prazo, 1 a 100 máquinas ou sem limite; revogáveis a qualquer momento; o código só aparece na criação; 200 downloads/dia por IP | `TestInstallLink` |
 | 🚦 **Cadastro limitado** | 120 cadastros/hora por IP | `httpapi` |
 
-### 🔄 Atualização automática ([ADR 0011](adr/0011-atualizacao-automatica.md))
+### 🔄 Atualização automática ([ADR 0011](DECISOES.md#adr-0011))
 
 | Defesa | Detalhe |
 |---|---|
@@ -92,7 +92,7 @@
 | 🪪 Só máquinas cadastradas | oferta e download exigem a credencial da máquina |
 | 🧪 Testado | `.exe` trocado, manifesto reescrito e chave de outro projeto são recusados (`TestAgentUpdateRejectsTampering`) |
 
-### 🖥️ Visualizador do técnico ([ADR 0012](adr/0012-visualizador-nativo.md))
+### 🖥️ Visualizador do técnico ([ADR 0012](DECISOES.md#adr-0012))
 
 | Defesa | Detalhe |
 |---|---|
@@ -100,6 +100,15 @@
 | 🔐 Token guardado com DPAPI | `%LOCALAPPDATA%\RemoteIT\viewer.token` só abre para o usuário do Windows que fez login; **Sair** apaga |
 | 📋 Área de transferência só com consentimento | a mensagem `clip` é ignorada antes de `granted`, como mouse e teclado; até 1 MiB |
 | ⌨️ Hook de teclado só em primeiro plano | as teclas só são capturadas com a janela da sessão em primeiro plano e a opção **Teclado** ligada |
+
+### 🏠 Rota local do visualizador ([ADR 0014](DECISOES.md#adr-0014))
+
+| Defesa | Detalhe |
+|---|---|
+| 🪪 Conferência antes da sessão | o endereço local (`RELAY_LOCAL_URL`) vem do relay pelo canal logado; o visualizador pergunta em `/api/relay`, **sem cookie**, a identidade do processo do outro lado (128 bits sorteados no início) e só manda a sessão se for a mesma. Um outro serviço escutando na mesma porta não recebe o cookie |
+| 🌐 Direto, sem proxy | a conferência e a tela pela rota local não passam pelo proxy configurado no Windows |
+| 🚪 Nada novo exposto | o relay continua escutando só em `127.0.0.1`; a rota local só serve a quem está no próprio PC (ou na rede, se o operador escolher um endereço de rede) |
+| 📜 Auditoria igual | a conexão local passa pelo mesmo `/ws/viewer`, com as mesmas regras; sem o cabeçalho do túnel, a auditoria grava o endereço da conexão |
 
 ### 📜 Auditoria
 
@@ -136,7 +145,7 @@
 | 🏷️ **Código de download vale 30 dias e 50 máquinas** | quem pegar um `.exe` de um técnico cadastra máquinas no nome dele | as máquinas aparecem na lista dele, que pode removê-las; não dá acesso a máquinas existentes | encurtar a validade ou usar links de 1 uso |
 | 🛡️ **Worker como SYSTEM** (modo serviço) | uma falha no agente seria uma falha com o privilégio máximo da máquina | só aceita entrada depois do consentimento e só fala com o relay autenticado | separar captura/entrada (SYSTEM) do transporte (usuário comum) |
 | 🙋 **Build `NO_CONSENT=1`** | o técnico vê a tela sem o usuário perceber | a auditoria registra tudo; o padrão do build é pedir | usar só com aviso formal aos usuários |
-| 🧾 **`.exe` sem assinatura** | SmartScreen e antivírus reclamam; um `.exe` adulterado não seria detectado pelo Windows | baixar só do console | certificado de code signing ([AGENTE-WINDOWS.md](AGENTE-WINDOWS.md#antivirus)) |
+| 🧾 **`.exe` sem assinatura** | SmartScreen e antivírus reclamam; um `.exe` adulterado não seria detectado pelo Windows | baixar só do console | certificado de code signing ([WINDOWS.md](WINDOWS.md#antivirus)) |
 | 🎨 **CSP com `style-src 'unsafe-inline'`** | estilos injetados não seriam bloqueados | scripts inline continuam proibidos | trocar os estilos dinâmicos por variáveis CSS e tirar o `unsafe-inline` |
 | 🔑 **Chave de atualização vazada ou perdida** | vazada: alguém assina um `.exe` malicioso e todos os agentes o instalam; perdida: nenhum agente atualiza mais | a chave fica só na máquina de build, fora do repositório e do servidor | cópia offline protegida; no futuro, trocar a chave por uma nova assinada pela antiga |
 | 🔁 Sem segundo fator (2FA) | uma senha vazada basta para entrar | recuperação derruba sessões | TOTP para admins |
@@ -160,4 +169,4 @@ curl -s -o /dev/null -w "%{http_code}\n" -H 'Content-Type: application/json' \
   -d '{"email":"nao-existe@exemplo.com"}' $B/api/account/reset             # 202 (ou 503 sem SMTP)
 ```
 
-Os testes de integração em [`test/integration`](../test/integration) provam o resto (CSWSH, papéis, auditoria obrigatória, links de uso único, consentimento): veja [TESTES.md](TESTES.md).
+Os testes de integração em [`test/integration`](../test/integration) provam o resto (CSWSH, papéis, auditoria obrigatória, links de uso único, consentimento): veja [CONTRIBUTING.md](../CONTRIBUTING.md#testes).

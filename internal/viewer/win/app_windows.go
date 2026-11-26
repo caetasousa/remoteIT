@@ -116,7 +116,7 @@ func Run(opts Options) error {
 	a.editBrush, _, _ = pCreateSolidBrush.Call(0x00000000)
 
 	cb := syscall.NewCallback(wndProc)
-	for _, name := range []string{mainClass, sessionClass} {
+	for _, name := range []string{mainClass, sessionClass, videoClass} {
 		wc := wndClassEx{WndProc: cb, ClassName: utf16(name), Background: windows.Handle(a.bgBrush)}
 		wc.Size = uint32(unsafe.Sizeof(wc))
 		h, _, _ := pGetModuleHandleW.Call(0)

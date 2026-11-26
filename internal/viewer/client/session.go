@@ -24,6 +24,8 @@ type Handler interface {
 	// mesmo segura a leitura do próximo quadro, então os acks seguintes
 	// esperam e o agente não manda mais do que este PC dá conta.
 	Frame(h protocol.FrameHeader, payload []byte)
+	// Region diz onde vale o próximo quadro de vídeo (veja protocol.Region).
+	Region(r protocol.Region)
 	// Status recebe waiting, granted, denied e secure.
 	Status(t string)
 	Stats(s protocol.Stats)
@@ -41,8 +43,22 @@ var Presets = []struct{ Value, Label string }{
 
 // Session é uma conexão de tela remota com uma máquina.
 type Session struct {
-	c  *websocket.Conn
-	mu sync.Mutex // gorilla/websocket aceita um escritor por vez
+	c    *websocket.Conn
+	mu   sync.Mutex // gorilla/websocket aceita um escritor por vez
+	view View       // o último cfg mandado
+}
+
+// View é o que o técnico pede ao agente no cfg: o preset de qualidade e a
+// área, em pixels físicos, onde mostra a tela (0 x 0 = resolução nativa,
+// como no "Tamanho real"). Os dois vão sempre juntos: um cfg sem a área
+// seria lido como "nativa".
+type View struct {
+	Preset string
+	W, H   int
+}
+
+func (v View) message() protocol.Message {
+	return protocol.Message{T: protocol.TypeConfig, P: v.Preset, VW: v.W, VH: v.H}
 }
 
 // Codecs monta a lista do hello, em ordem de preferência, a partir do que
@@ -69,18 +85,34 @@ func hello(codecs []string) protocol.Message {
 	return protocol.Message{T: protocol.TypeHello, Codecs: codecs, H264: slices.Contains(codecs, protocol.CodecNameH264)}
 }
 
-// Dial abre a sessão com a máquina id. codecs é a lista de [Codecs] (sem
-// ela o agente manda JPEG); preset é o inicial.
-func (a *API) Dial(ctx context.Context, id string, codecs []string, preset string) (*Session, error) {
-	u := *a.Base
-	u.Scheme = map[string]string{"https": "wss", "http": "ws"}[a.Base.Scheme]
-	u.Path, u.RawQuery = "/ws/viewer", url.Values{"id": {id}}.Encode()
+// Dial abre a sessão com a máquina id pelo endereço do relay. codecs é a
+// lista de [Codecs] (sem ela o agente manda JPEG); v é o cfg inicial.
+func (a *API) Dial(ctx context.Context, id string, codecs []string, v View) (*Session, error) {
+	return a.DialVia(ctx, nil, id, codecs, v)
+}
+
+// DialVia abre a sessão por outro endereço do mesmo relay (base, a rota
+// local de [API.LocalRoute]); nil = o endereço configurado. A sessão vai
+// num cabeçalho Cookie: o cookie guardado é do endereço público.
+func (a *API) DialVia(ctx context.Context, base *url.URL, id string, codecs []string, v View) (*Session, error) {
+	hdr := http.Header{}
 	d := websocket.Dialer{
 		Jar: a.http.Jar, Proxy: http.ProxyFromEnvironment, HandshakeTimeout: 20 * time.Second,
 		ReadBufferSize: 256 << 10, WriteBufferSize: 16 << 10,
 	}
-	// sem cabeçalho Origin: o relay só barra Origin de outro site (CSWSH)
-	c, resp, err := d.DialContext(ctx, u.String(), nil)
+	if base == nil {
+		base = a.Base
+	} else {
+		d.Jar, d.Proxy = nil, nil // direto, só com o cabeçalho abaixo
+		if tok := a.Token(); tok != "" {
+			hdr.Set("Cookie", (&http.Cookie{Name: SessionCookie, Value: tok}).String())
+		}
+		hdr.Set("Origin", base.Scheme+"://"+base.Host) // o relay exige Origin igual ao Host
+	}
+	u := *base
+	u.Scheme = map[string]string{"https": "wss", "http": "ws"}[base.Scheme]
+	u.Path, u.RawQuery = "/ws/viewer", url.Values{"id": {id}}.Encode()
+	c, resp, err := d.DialContext(ctx, u.String(), hdr)
 	if err != nil {
 		if resp != nil {
 			switch resp.StatusCode {
@@ -92,9 +124,9 @@ func (a *API) Dial(ctx context.Context, id string, codecs []string, preset strin
 		}
 		return nil, err
 	}
-	s := &Session{c: c}
+	s := &Session{c: c, view: v}
 	s.send(hello(codecs))
-	s.send(protocol.Message{T: protocol.TypeConfig, P: preset})
+	s.send(v.message())
 	return s, nil
 }
 
@@ -132,6 +164,11 @@ func (s *Session) Run(ctx context.Context, h Handler) error {
 			continue
 		}
 		switch m.T {
+		case protocol.TypeRegion:
+			var r protocol.Region
+			if json.Unmarshal(data, &r) == nil && r.R != nil && len(r.R)%4 == 0 {
+				h.Region(r)
+			}
 		case protocol.TypeStats:
 			var st protocol.Stats
 			json.Unmarshal(data, &st)
@@ -153,9 +190,27 @@ func (s *Session) Run(ctx context.Context, h Handler) error {
 // Close encerra a sessão.
 func (s *Session) Close() error { return s.c.Close() }
 
-// Preset troca a qualidade sem reconectar.
+// Preset troca a qualidade sem reconectar (mantém a área).
 func (s *Session) Preset(p string) error {
-	return s.send(protocol.Message{T: protocol.TypeConfig, P: p})
+	s.mu.Lock()
+	s.view.Preset = p
+	m := s.view.message()
+	s.mu.Unlock()
+	return s.send(m)
+}
+
+// Viewport informa a área onde a tela é mostrada, em pixels físicos (0 x 0
+// = nativa); o agente reduz o vídeo para caber nela. Mantém o preset.
+func (s *Session) Viewport(w, h int) error {
+	s.mu.Lock()
+	if s.view.W == w && s.view.H == h {
+		s.mu.Unlock()
+		return nil
+	}
+	s.view.W, s.view.H = w, h
+	m := s.view.message()
+	s.mu.Unlock()
+	return s.send(m)
 }
 
 // SetCodecs troca a lista de codecs sem reconectar: o agente reabre a

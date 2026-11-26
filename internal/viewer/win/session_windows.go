@@ -5,9 +5,12 @@ package win
 import (
 	"context"
 	"errors"
+	"image"
+	"log/slog"
 	"runtime"
 	"sync"
 	"sync/atomic"
+	"time"
 	"unsafe"
 
 	"golang.org/x/sys/windows"
@@ -15,6 +18,7 @@ import (
 	"remoteit/internal/protocol"
 	"remoteit/internal/viewer/client"
 	"remoteit/internal/viewer/decode"
+	"remoteit/internal/viewer/render"
 	"remoteit/internal/viewer/ui"
 )
 
@@ -25,6 +29,14 @@ const (
 	wmStatus = wmApp + 12 // status novo (aguardando, protegida, encerrada)
 	wmCursor = wmApp + 13 // formato do cursor mudou
 	wmStats  = wmApp + 14 // telemetria nova para a barra
+	wmGDI    = wmApp + 15 // o desenho na GPU falhou: volta para o GDI
+)
+
+// idViewportTimer espera a janela parar de mudar de tamanho antes de pedir
+// ao agente o vídeo no tamanho novo (reabrir o encoder custa um keyframe).
+const (
+	idViewportTimer = 7
+	viewportDelay   = 400 // ms
 )
 
 // barH é a altura da barra de telemetria, em pixels lógicos.
@@ -74,24 +86,36 @@ type sessionWin struct {
 	savedStyle uintptr
 	capture    bool
 	keys       *keyTranslator
-	dest       rect // onde o vídeo foi desenhado (para mapear o mouse)
 
 	cancel  context.CancelFunc
 	out     chan func(*client.Session) // envio sem travar a interface
 	pending atomic.Bool                // já há um wmFrame na fila
 
-	mu     sync.Mutex
-	can    decoders        // o que este PC decodifica (achado ao conectar)
-	broken map[string]bool // codecs que falharam nesta sessão: fora do hello
-	sess   *client.Session
-	frame  *decode.Frame
-	status string
-	title  string
-	stats  protocol.Stats // último stats do agente
-	drawn  int            // quadros desenhados no último segundo
-	gpu    bool           // decodificação na GPU
-	hasSt  bool
-	cursor string
+	// desenho na GPU: uma janela filha cobre a área de vídeo e o render
+	// desenha nela; os cliques passam para a janela da sessão. nil = GDI.
+	video windows.HWND
+	rend  *render.Renderer
+
+	mu       sync.Mutex
+	can      decoders        // o que este PC decodifica (achado ao conectar)
+	broken   map[string]bool // codecs que falharam nesta sessão: fora do hello
+	sess     *client.Session
+	canvas   decode.Canvas // a tela composta do desenho pela CPU (GDI)
+	status   string
+	title    string
+	stats    protocol.Stats // último stats do agente
+	drawn    int            // quadros desenhados no último segundo
+	gpu      bool           // decodificação na GPU
+	gpuDraw  bool           // desenho na GPU (render)
+	decodeUs int            // decodificação + desenho aqui, média por quadro
+	route    string         // "local" (direto no PC do relay) ou "internet"
+	hasSt    bool
+	cursor   string
+	area     rect // área de vídeo na janela (cliente menos a barra)
+	frameW   int  // tamanho do quadro composto no render (desenho na GPU)
+	frameH   int
+	actual   bool // cópia de actualSize para a goroutine de desenho
+	dest     rect // onde o vídeo foi desenhado (para mapear o mouse)
 }
 
 func (a *App) openSession(m client.Machine) {
@@ -104,7 +128,9 @@ func (a *App) openSession(m client.Machine) {
 	a.handlers[w.hwnd] = w.proc
 	openSessions.Add(1)
 	w.buildMenu()
+	w.openRenderer()
 	show(w.hwnd, true)
+	w.layout()
 	pUpdateWindow.Call(uintptr(w.hwnd))
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -176,10 +202,31 @@ func (w *sessionWin) run(ctx context.Context) {
 	w.can = probeDecoders()
 	codecs := w.codecsLocked()
 	w.mu.Unlock()
-	h := &sessionHandler{w: w, vids: map[byte]decode.Video{}, errs: map[byte]int{}}
+	h := &sessionHandler{w: w, vids: map[byte]decode.Video{}, tex: map[byte]decode.TexVideo{}, errs: map[byte]int{},
+		regions: map[uint32][]image.Rectangle{}}
 	defer h.closeAll()
 
-	s, err := w.app.api.Dial(ctx, w.machine.ID, codecs, w.preset)
+	w.mu.Lock()
+	h.rend = w.rend
+	w.mu.Unlock()
+	vw, vh := w.viewport()
+	view := client.View{Preset: w.preset, W: vw, H: vh}
+	// rota local: com o relay neste PC (ou na mesma rede), a tela vai direto
+	// por ele, sem dar a volta pela internet
+	var s *client.Session
+	var err error
+	route := "internet"
+	if local := w.app.api.LocalRoute(ctx); local != nil {
+		if s, err = w.app.api.DialVia(ctx, local, w.machine.ID, codecs, view); err == nil {
+			route = "local"
+		}
+	}
+	if s == nil {
+		s, err = w.app.api.Dial(ctx, w.machine.ID, codecs, view)
+	}
+	w.mu.Lock()
+	w.route = route
+	w.mu.Unlock()
 	if err != nil {
 		if errors.Is(err, client.ErrUnauthorized) {
 			post(w.app.main, wmLoggedOut)
@@ -273,13 +320,37 @@ func (w *sessionWin) resendCodecs() {
 	w.send(func(s *client.Session) { s.SetCodecs(codecs) })
 }
 
-// sessionHandler decodifica os quadros na goroutine de [sessionWin.run].
+// sessionHandler decodifica e desenha os quadros na goroutine de
+// [sessionWin.run].
 type sessionHandler struct {
 	w     *sessionWin
-	vids  map[byte]decode.Video // um decodificador por codec, aberto no primeiro quadro
-	errs  map[byte]int          // falhas seguidas por codec
-	last  byte                  // codec do último quadro de vídeo
-	drawn int                   // quadros de vídeo prontos desde o último stats
+	rend  *render.Renderer         // desenho na GPU; nil = CPU/GDI
+	vids  map[byte]decode.Video    // caminho da CPU: um por codec, aberto no primeiro quadro
+	tex   map[byte]decode.TexVideo // caminho da GPU: decodifica direto nas texturas do render
+	errs  map[byte]int             // falhas seguidas por codec
+	last  byte                     // codec do último quadro de vídeo
+	drawn int                      // quadros de vídeo prontos desde o último stats
+	aux   bool                     // a visão auxiliar do AVC444 já chegou neste tamanho
+	auxW  int
+	auxH  int
+	took  time.Duration // decodificação + desenho desde o último stats
+	tookN int
+
+	// regiões (protocol.Region) por quadro e o que se acumulou dos quadros
+	// entregues ao decodificador que ainda não saíram: quando sair imagem,
+	// o vídeo vale na união deles (ou na tela inteira, se algum não tinha)
+	regions map[uint32][]image.Rectangle
+	acc     []image.Rectangle
+	accFull bool
+	waiting bool
+	patches []patch // retalhos que esperam o vídeo de antes deles sair
+}
+
+// patch é um retalho sem perda (ou a tela inteira) já decodificado.
+type patch struct {
+	x, y int
+	f    *decode.Frame
+	w, h int // tamanho do quadro
 }
 
 // codecNames liga o código do quadro ao nome do hello e ao construtor.
@@ -300,6 +371,9 @@ func (h *sessionHandler) closeAll() {
 	for _, v := range h.vids {
 		v.Close()
 	}
+	for _, v := range h.tex {
+		v.Close()
+	}
 }
 
 // fail descarta o decodificador do codec e pede um keyframe; na terceira
@@ -309,6 +383,12 @@ func (h *sessionHandler) fail(codec byte) {
 		v.Close()
 		delete(h.vids, codec)
 	}
+	if v := h.tex[codec]; v != nil {
+		v.Close()
+		delete(h.tex, codec)
+	}
+	h.acc, h.accFull, h.waiting = nil, false, false
+	h.flushPatches()
 	h.errs[codec]++
 	if h.errs[codec] >= maxDecodeErrors {
 		h.w.mu.Lock()
@@ -320,41 +400,227 @@ func (h *sessionHandler) fail(codec byte) {
 	h.w.send(func(s *client.Session) { s.Keyframe() })
 }
 
+// Region guarda onde o próximo quadro de vídeo vale.
+func (h *sessionHandler) Region(r protocol.Region) {
+	rs := make([]image.Rectangle, 0, len(r.R)/4)
+	for i := 0; i+3 < len(r.R); i += 4 {
+		rs = append(rs, image.Rect(r.R[i], r.R[i+1], r.R[i]+r.R[i+2], r.R[i+1]+r.R[i+3]))
+	}
+	if len(h.regions) > 256 { // regiões de quadros que nunca chegaram: limpa
+		clear(h.regions)
+	}
+	h.regions[r.S] = rs
+}
+
 func (h *sessionHandler) Frame(hd protocol.FrameHeader, payload []byte) {
-	var f *decode.Frame
-	var err error
-	if c, ok := codecNames[hd.Codec]; ok {
+	start := time.Now()
+	switch hd.Codec {
+	case protocol.CodecH264, protocol.CodecAVC444, protocol.CodecAV1:
 		h.last = hd.Codec
-		v := h.vids[hd.Codec]
-		if v == nil {
-			if v, err = c.open(); err != nil {
-				h.fail(hd.Codec)
-				return
-			}
-			h.vids[hd.Codec] = v
+		if rs, ok := h.regions[hd.Seq]; ok {
+			h.acc = append(h.acc, rs...)
+			delete(h.regions, hd.Seq)
+		} else {
+			h.accFull = true // quadro sem Region (keyframe, agente antigo): vale inteiro
 		}
-		if f, err = v.Decode(payload, int(hd.W), int(hd.H)); err != nil {
-			h.fail(hd.Codec)
+		h.waiting = true
+		drew := false
+		if h.rend != nil {
+			drew = h.videoGPU(hd, payload)
+		}
+		if h.rend == nil { // sem GPU, ou ela acabou de falhar
+			drew = h.videoCPU(hd, payload)
+		}
+		if drew {
+			h.drawn++
+			h.took += time.Since(start)
+			h.tookN++
+			h.waiting = false
+			h.flushPatches()
+			h.show()
+		}
+	case protocol.CodecJPEG:
+		if f, err := decode.Image(payload); err == nil {
+			h.acc, h.accFull, h.waiting = nil, false, false
+			h.drawWhole(f)
+			h.drawn++
+			h.took += time.Since(start)
+			h.tookN++
+			h.flushPatches()
+			h.show()
+		}
+	case protocol.CodecPNG: // refresh sem perda da tela inteira
+		if f, err := decode.Image(payload); err == nil {
+			h.queuePatch(patch{0, 0, f, int(hd.W), int(hd.H)})
+		}
+	case protocol.CodecPNGRect: // retalhos sem perda das partes que pararam
+		rects, err := protocol.ParsePNGRects(payload)
+		if err != nil {
 			return
 		}
-		if f != nil {
-			h.errs[hd.Codec] = 0
+		for _, r := range rects {
+			if f, err := decode.Image(r.PNG); err == nil {
+				h.queuePatch(patch{r.X, r.Y, f, int(hd.W), int(hd.H)})
+			}
 		}
-	} else { // JPEG e o refresh de nitidez em PNG
-		f, err = decode.Image(payload)
 	}
-	if f == nil || err != nil {
-		return
+}
+
+// region é onde o vídeo que acabou de sair vale: nil = a tela inteira.
+func (h *sessionHandler) region() []image.Rectangle {
+	defer func() { h.acc, h.accFull = nil, false }()
+	if h.accFull {
+		return nil
 	}
-	if hd.Codec != protocol.CodecPNG {
-		h.drawn++ // o refresh de nitidez não é quadro de vídeo
+	if h.acc == nil {
+		return []image.Rectangle{}
+	}
+	return h.acc
+}
+
+// videoGPU decodifica direto nas texturas do render e compõe. Uma falha do
+// render (não do decodificador) passa a sessão para o GDI.
+func (h *sessionHandler) videoGPU(hd protocol.FrameHeader, payload []byte) bool {
+	v := h.tex[hd.Codec]
+	if v == nil {
+		var err error
+		if v, err = decode.NewTex(hd.Codec, h.rend.Device()); err != nil {
+			h.toGDI(err)
+			return false
+		}
+		h.tex[hd.Codec] = v
+	}
+	w, hh := int(hd.W)&^1, int(hd.H)&^1
+	got, err := v.Decode(payload, int(hd.W), int(hd.H), h.rend.Video)
+	if err != nil {
+		h.fail(hd.Codec)
+		return false
+	}
+	if got == 0 {
+		return false
+	}
+	h.errs[hd.Codec] = 0
+	kind := render.NV12
+	if hd.Codec == protocol.CodecAVC444 {
+		if got&2 != 0 {
+			h.aux, h.auxW, h.auxH = true, w, hh
+		}
+		kind = render.AVC444Main
+		if h.aux && h.auxW == w && h.auxH == hh {
+			kind = render.AVC444
+		}
+	}
+	if err := h.rend.ComposeVideo(kind, w, hh, h.region()); err != nil {
+		h.toGDI(err)
+		return false
 	}
 	h.w.mu.Lock()
-	h.w.frame = f
+	h.w.frameW, h.w.frameH, h.w.gpu = w, hh, v.GPU()
 	h.w.mu.Unlock()
+	return true
+}
+
+// videoCPU é o caminho de antes: decodifica para a memória, converte na
+// CPU e compõe na Canvas, que o GDI desenha.
+func (h *sessionHandler) videoCPU(hd protocol.FrameHeader, payload []byte) bool {
+	c := codecNames[hd.Codec]
+	v := h.vids[hd.Codec]
+	if v == nil {
+		var err error
+		if v, err = c.open(); err != nil {
+			h.fail(hd.Codec)
+			return false
+		}
+		h.vids[hd.Codec] = v
+	}
+	f, err := v.Decode(payload, int(hd.W), int(hd.H))
+	if err != nil {
+		h.fail(hd.Codec)
+		return false
+	}
+	if f == nil {
+		return false
+	}
+	h.errs[hd.Codec] = 0
+	region := h.region()
+	h.w.mu.Lock()
+	h.w.canvas.Video(f, region)
+	h.w.gpu = v.GPU()
+	h.w.mu.Unlock()
+	return true
+}
+
+// drawWhole põe um quadro inteiro (JPEG) na tela composta.
+func (h *sessionHandler) drawWhole(f *decode.Frame) {
+	if h.rend != nil {
+		err := h.rend.ComposeBGRA(0, 0, f.W, f.H, f.BGRA, f.W, f.H)
+		if err == nil {
+			h.w.mu.Lock()
+			h.w.frameW, h.w.frameH = f.W, f.H
+			h.w.mu.Unlock()
+			return
+		}
+		h.toGDI(err)
+	}
+	h.w.mu.Lock()
+	h.w.canvas.Video(f, nil)
+	h.w.mu.Unlock()
+}
+
+// queuePatch aplica o retalho já, ou depois que sair o vídeo dos quadros
+// anteriores a ele (senão o vídeo mais velho o cobriria).
+func (h *sessionHandler) queuePatch(p patch) {
+	h.patches = append(h.patches, p)
+	if !h.waiting {
+		h.flushPatches()
+	}
+}
+
+func (h *sessionHandler) flushPatches() {
+	if len(h.patches) == 0 {
+		return
+	}
+	for _, p := range h.patches {
+		if h.rend != nil {
+			if err := h.rend.ComposeBGRA(p.x, p.y, p.f.W, p.f.H, p.f.BGRA, p.w, p.h); err != nil {
+				h.toGDI(err)
+			} else {
+				continue
+			}
+		}
+		h.w.mu.Lock()
+		h.w.canvas.Patch(p.x, p.y, p.f, p.w, p.h)
+		h.w.mu.Unlock()
+	}
+	h.patches = nil
+	h.show()
+}
+
+// show leva a tela composta à janela.
+func (h *sessionHandler) show() {
+	if h.rend != nil {
+		h.w.present()
+		return
+	}
 	if !h.w.pending.Swap(true) {
 		post(h.w.hwnd, wmFrame)
 	}
+}
+
+// toGDI desliga o desenho na GPU desta sessão (o render falhou) e pede um
+// keyframe: o caminho da CPU começa do zero.
+func (h *sessionHandler) toGDI(err error) {
+	if h.rend == nil {
+		return
+	}
+	slog.Info("desenho na GPU falhou; voltando para o GDI", "err", err)
+	for c, v := range h.tex {
+		v.Close()
+		delete(h.tex, c)
+	}
+	h.rend = nil
+	post(h.w.hwnd, wmGDI)
+	h.w.send(func(s *client.Session) { s.Keyframe() })
 }
 
 func (h *sessionHandler) Status(t string) {
@@ -377,9 +643,14 @@ func (h *sessionHandler) Stats(st protocol.Stats) {
 	h.w.mu.Lock()
 	h.w.title = t
 	h.w.stats, h.w.drawn, h.w.hasSt = st, h.drawn, true
-	h.w.gpu = v != nil && v.GPU()
+	if v != nil {
+		h.w.gpu = v.GPU()
+	}
+	if h.tookN > 0 {
+		h.w.decodeUs = int((h.took / time.Duration(h.tookN)).Microseconds())
+	}
 	h.w.mu.Unlock()
-	h.drawn = 0
+	h.drawn, h.took, h.tookN = 0, 0, 0
 	post(h.w.hwnd, wmTitle)
 	post(h.w.hwnd, wmStats)
 }
@@ -408,8 +679,18 @@ func (w *sessionWin) proc(hwnd windows.HWND, m uint32, wp, lp uintptr) (uintptr,
 		setText(hwnd, t)
 		return 0, true
 	case wmStatus:
+		w.layout() // aviso na tela: a janela filha do vídeo sai da frente
 		pInvalidateRect.Call(uintptr(hwnd), 0, 0)
 		return 0, true
+	case wmGDI:
+		w.useGDI()
+		return 0, true
+	case wmTimer:
+		if wp == idViewportTimer {
+			pKillTimer.Call(uintptr(hwnd), idViewportTimer)
+			w.sendViewport()
+			return 0, true
+		}
 	case wmCursor:
 		return 0, true
 	case wmEraseBkgnd:
@@ -418,6 +699,7 @@ func (w *sessionWin) proc(hwnd windows.HWND, m uint32, wp, lp uintptr) (uintptr,
 		w.paint()
 		return 0, true
 	case wmSize:
+		w.layout()
 		pInvalidateRect.Call(uintptr(hwnd), 0, 0)
 		return 0, true
 	case wmSetCursor:
@@ -478,6 +760,19 @@ func (w *sessionWin) proc(hwnd windows.HWND, m uint32, wp, lp uintptr) (uintptr,
 		pDestroyWindow.Call(uintptr(hwnd))
 		return 0, true
 	case wmDestroy:
+		pKillTimer.Call(uintptr(hwnd), idViewportTimer)
+		if w.video != 0 {
+			delete(w.app.handlers, w.video)
+		}
+		w.mu.Lock()
+		r := w.rend
+		w.mu.Unlock()
+		if r != nil {
+			go func() { // depois que a goroutine de desenho parar de usar
+				time.Sleep(time.Second)
+				r.Close()
+			}()
+		}
 		delete(w.app.sessions, hwnd)
 		delete(w.app.handlers, hwnd)
 		openSessions.Add(-1)
@@ -499,14 +794,17 @@ func (w *sessionWin) command(id int32) {
 		w.resendCodecs()
 	case id == idBar:
 		w.showBar = !w.showBar
+		w.layout()
 		pInvalidateRect.Call(uintptr(w.hwnd), 0, 0)
 	case id == idDiag:
 		w.mu.Lock()
-		text := ui.Diagnostics(w.app.opts.Version, w.can.h264, w.can.av1, w.codecsLocked(), w.stats, w.drawn, w.preset)
+		text := ui.Diagnostics(w.app.opts.Version, w.can.h264, w.can.av1, w.codecsLocked(), w.stats, w.drawn, w.preset, w.localLocked())
 		w.mu.Unlock()
 		infoBox(w.hwnd, "Diagnóstico de vídeo — "+w.machine.Name, text)
 	case id == idActualSize:
 		w.actualSize = !w.actualSize
+		w.layout() // pede ao agente a resolução nativa (1:1) ou a da janela
+		w.present()
 		pInvalidateRect.Call(uintptr(w.hwnd), 0, 0)
 	case id == idFullscreen:
 		w.toggleFullscreen()
@@ -556,33 +854,28 @@ func (w *sessionWin) paint() {
 		w.paintBar(hdc, bar)
 	}
 
+	// a GDI só desenha o vídeo quando não há desenho na GPU (a janela filha
+	// cobre a área) ou quando um aviso tirou a filha da frente
 	w.mu.Lock()
-	f, status := w.frame, w.status
-	w.mu.Unlock()
+	defer w.mu.Unlock()
+	f, status := w.canvas.Frame(), w.status
 	bg := w.app.bgBrush
+	if w.rend != nil {
+		f = nil
+	}
 
 	if f == nil {
 		pFillRect.Call(hdc, uintptr(unsafe.Pointer(&rc)), bg)
-		w.dest = rect{}
+		if w.rend == nil {
+			w.dest = rect{}
+		}
 		w.drawCard(hdc, rc, status)
 		return
 	}
 
-	// ajustado à janela (sem distorcer) ou em tamanho real; se a ampliação for
-	// pequena (até 10%), fica em 1:1, que é mais nítido
-	dw, dh := int32(f.W), int32(f.H)
-	if !w.actualSize && rc.w() > 0 && rc.h() > 0 {
-		sx, sy := float64(rc.w())/float64(f.W), float64(rc.h())/float64(f.H)
-		s := min(sx, sy)
-		if s < 1 || s > 1.1 {
-			dw, dh = int32(float64(f.W)*s), int32(float64(f.H)*s)
-		}
-	}
-	dx, dy := (rc.w()-dw)/2, (rc.h()-dh)/2
-	if w.actualSize { // maior que a janela: ancora no canto, sem centralizar fora da tela
-		dx, dy = max(dx, 0), max(dy, 0)
-	}
-	w.dest = rect{dx, dy, dx + dw, dy + dh}
+	d := fitDest(f.W, f.H, rect{0, 0, rc.w(), rc.h()}, w.actualSize)
+	dx, dy, dw, dh := d.Left, d.Top, d.w(), d.h()
+	w.dest = d
 
 	// bordas pintadas à parte: o vídeo não pisca ao redimensionar
 	for _, b := range []rect{{0, 0, rc.Right, dy}, {0, dy + dh, rc.Right, rc.Bottom}, {0, dy, dx, dy + dh}, {dx + dw, dy, rc.Right, dy + dh}} {
@@ -633,7 +926,7 @@ func (w *sessionWin) paintBar(hdc uintptr, bar rect) {
 	fillRect(hdc, bar, colorPanel)
 	fillRect(hdc, rect{bar.Left, bar.Top, bar.Right, bar.Top + 1}, colorLine)
 	w.mu.Lock()
-	st, drawn, gpu, has := w.stats, w.drawn, w.gpu, w.hasSt
+	st, drawn, has, local := w.stats, w.drawn, w.hasSt, w.localLocked()
 	hint := ui.ColorHint(w.color444, w.can.h264, w.broken[protocol.CodecNameAVC444], w.preset, st.Encoder)
 	w.mu.Unlock()
 	x := bar.Left + px(14)
@@ -647,7 +940,7 @@ func (w *sessionWin) paintBar(hdc uintptr, bar rect) {
 		drawString(hdc, rect{right - hw, bar.Top, right, bar.Bottom}, hint, w.app.fontSmall, colorWarn, dtRight)
 		right -= hw + px(20)
 	}
-	for _, sg := range ui.Telemetry(st, drawn, gpu) {
+	for _, sg := range ui.Telemetry(st, drawn, local) {
 		lw := textWidth(hdc, sg.Label, w.app.fontSmall)
 		vw := textWidth(hdc, sg.Value, w.app.fontMono)
 		if x+lw+px(6)+vw > right {
@@ -660,6 +953,12 @@ func (w *sessionWin) paintBar(hdc uintptr, bar rect) {
 	}
 }
 
+// localLocked é o que este PC sabe da sessão, para a barra e o
+// diagnóstico. Chame com w.mu travado.
+func (w *sessionWin) localLocked() ui.Local {
+	return ui.Local{GPUDecode: w.gpu, GPUDraw: w.gpuDraw, DecodeUs: w.decodeUs, Route: w.route}
+}
+
 // overBar informa se o ponto lp (coordenadas do cliente) está na barra.
 func (w *sessionWin) overBar(lp uintptr) bool {
 	var rc rect
@@ -670,7 +969,9 @@ func (w *sessionWin) overBar(lp uintptr) bool {
 
 // norm converte a posição do mouse na janela em [0,1] da tela remota.
 func (w *sessionWin) norm(lp uintptr) (float64, float64) {
+	w.mu.Lock()
 	d := w.dest
+	w.mu.Unlock()
 	if d.w() <= 0 || d.h() <= 0 {
 		return 0, 0
 	}
@@ -773,6 +1074,7 @@ func (w *sessionWin) toggleFullscreen() {
 		r := mi.Monitor
 		pSetWindowPos.Call(h, 0, uintptr(r.Left), uintptr(r.Top), uintptr(r.w()), uintptr(r.h()), swpNoZOrder|swpFrameChanged)
 		w.full = true
+		w.layout() // sem a barra em tela cheia
 		return
 	}
 	pSetWindowLongPtrW.Call(h, uintptr(gwlStyleIndex()), w.savedStyle)
@@ -780,6 +1082,7 @@ func (w *sessionWin) toggleFullscreen() {
 	r := w.saved
 	pSetWindowPos.Call(h, 0, uintptr(r.Left), uintptr(r.Top), uintptr(r.w()), uintptr(r.h()), swpNoZOrder|swpFrameChanged)
 	w.full = false
+	w.layout()
 }
 
 // gwlStyleIndex é GWL_STYLE (-16) como o Win32 espera receber.

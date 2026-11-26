@@ -6,7 +6,7 @@ package protocol
 // [EnrollMarker] e é completada com [EnrollPad]. No download, o relay acha o
 // marcador no binário e grava o código do técnico logo depois dele, sem
 // recompilar. Assim cada técnico recebe um .exe que cadastra as máquinas no
-// nome dele (veja docs/adr/0010-maquinas-por-tecnico.md).
+// nome dele (veja docs/DECISOES.md, ADR 0010).
 //
 // O marcador só pode aparecer uma vez no binário: o agente nunca usa
 // EnrollMarker sozinho em tempo de execução, só len(EnrollMarker), que é uma

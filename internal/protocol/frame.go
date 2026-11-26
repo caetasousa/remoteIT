@@ -24,6 +24,10 @@ const (
 	// CodecAV1 é AV1 em OBUs no formato "low overhead" (com tamanho), uma
 	// unidade temporal por quadro, como o WebCodecs espera.
 	CodecAV1 byte = 5
+	// CodecPNGRect são retalhos PNG sem perda de partes da tela que pararam
+	// de mudar (veja [AppendPNGRects]); W e H do cabeçalho são o tamanho do
+	// quadro inteiro. Técnicos antigos ignoram.
+	CodecPNGRect byte = 6
 )
 
 // Nomes dos codecs na negociação (campo Codecs do hello).
@@ -119,4 +123,48 @@ func ParseFrame(msg []byte) (FrameHeader, []byte, error) {
 		Seq:      binary.BigEndian.Uint32(msg[6:]),
 	}
 	return h, msg[HeaderSize:], nil
+}
+
+// PNGRect é um retalho sem perda: uma imagem PNG para desenhar em (X, Y).
+type PNGRect struct {
+	X, Y int
+	PNG  []byte
+}
+
+// ErrShortPNGRect indica um payload de retalhos truncado.
+var ErrShortPNGRect = errors.New("protocol: payload de retalhos PNG truncado")
+
+// AppendPNGRects monta o payload de CodecPNGRect: para cada retalho,
+// x (2 bytes) | y (2 bytes) | tamanho do PNG (4 bytes) | PNG, big-endian.
+func AppendPNGRects(dst []byte, rects []PNGRect) []byte {
+	for _, r := range rects {
+		var hdr [8]byte
+		binary.BigEndian.PutUint16(hdr[0:], uint16(r.X))
+		binary.BigEndian.PutUint16(hdr[2:], uint16(r.Y))
+		binary.BigEndian.PutUint32(hdr[4:], uint32(len(r.PNG)))
+		dst = append(append(dst, hdr[:]...), r.PNG...)
+	}
+	return dst
+}
+
+// ParsePNGRects separa os retalhos de um payload de CodecPNGRect. Os PNG
+// apontam para dentro de payload.
+func ParsePNGRects(payload []byte) ([]PNGRect, error) {
+	var out []PNGRect
+	for len(payload) > 0 {
+		if len(payload) < 8 {
+			return nil, ErrShortPNGRect
+		}
+		n := binary.BigEndian.Uint32(payload[4:])
+		if uint64(n) > uint64(len(payload)-8) {
+			return nil, ErrShortPNGRect
+		}
+		out = append(out, PNGRect{
+			X:   int(binary.BigEndian.Uint16(payload[0:])),
+			Y:   int(binary.BigEndian.Uint16(payload[2:])),
+			PNG: payload[8 : 8+n],
+		})
+		payload = payload[8+n:]
+	}
+	return out, nil
 }

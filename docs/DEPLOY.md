@@ -47,6 +47,7 @@ binário com `-domain` (Let's Encrypt, porta 443 pública) ou `-cert/-key`.
 | `RELAY_BIND` / `RELAY_PORT` | compose | Onde publicar o relay (padrão `127.0.0.1:8080`) |
 | `RELAY_CLIENT_IP_HEADER` | relay | Cabeçalho com o IP real do técnico para a auditoria (`Cf-Connecting-IP` atrás do Cloudflare Tunnel). Só use se o relay não for acessível sem o túnel: o cabeçalho pode ser falsificado |
 | `RELAY_PUBLIC_URL` | relay | Base dos links dos e-mails (`https://dominio`). Nunca vem do cabeçalho `Host`, que pode ser forjado |
+| `RELAY_LOCAL_URL` | relay | Como alcançar o relay sem a internet, no PC (ou rede) onde ele roda, ex.: `http://localhost:3000`. O visualizador do técnico confere que é o mesmo relay e abre a tela por ali ([veja abaixo](#relay-em-casa)). Vazio desliga |
 | `RELAY_ADMIN_EMAIL` | relay | Quem confirmar esta caixa no cadastro vira admin aprovado; recebe aviso de conta pendente |
 | `SMTP_HOST` / `SMTP_PORT` | relay | Servidor SMTP (porta padrão 587). Sem host, cadastro e recuperação ficam desligados |
 | `SMTP_USER` / `SMTP_PASSWORD` / `SMTP_STARTTLS` | relay | Credenciais; com senha, STARTTLS é obrigatório |
@@ -113,6 +114,28 @@ Sem registry, a imagem vai por `docker save remoteit-relay:latest | gzip | ssh .
 compose sobe com `docker compose up -d --no-build --wait`. Com o Docker rootless, o IP de origem que o
 container vê é o do slirp4netns, por isso o `RELAY_CLIENT_IP_HEADER` é necessário para auditar o IP real.
 
+<a id="relay-em-casa"></a>
+## 🏠 Relay em casa: atendendo do próprio PC do relay
+
+> Opcional. Na produção atual fica **desligado**: todo acesso vai pelo domínio público. Sem
+> `RELAY_LOCAL_URL`, o visualizador nem tenta o endereço local.
+
+Com o relay num PC de casa atrás do Cloudflare Tunnel, um técnico sentado nesse mesmo PC mandava o
+vídeo dar a volta pela internet: sair de casa até a Cloudflare, ir ao POP do túnel e voltar, ~90 ms
+a mais por ida e volta, e ainda pelo upload de casa ([ADR 0014](DECISOES.md#adr-0014)). Para cortar
+esse desvio:
+
+- **Visualizador do técnico:** defina `RELAY_LOCAL_URL` com o endereço local que o PC enxerga (no
+  servidor de produção, `http://localhost:3000`, a porta do `RELAY_BIND`/`RELAY_PORT`) e reinicie o
+  relay. O visualizador entra pelo endereço público, como sempre, e abre a tela pelo local quando
+  chega nele. A barra mostra **Rota local**.
+- **Console no navegador:** abra `http://localhost:3000` no próprio PC (é um contexto seguro para o
+  navegador, então o vídeo funciona sem HTTPS). O login é separado do endereço público.
+
+Com o relay numa distro WSL, o Windows alcança a porta pelo `localhost` (o encaminhamento padrão do
+WSL). Se `http://localhost:3000` não abrir no navegador do Windows, confira esse encaminhamento antes
+de mudar a variável.
+
 ## 💾 Backup do banco
 
 ```bash
@@ -142,7 +165,7 @@ aqui: só com um `.exe` assinado por certificado ou política de domínio.
 
 O `build.sh` assina cada versão com a chave em `~/.config/remoteit/update-ed25519.key` (criada na
 primeira vez; `UPDATE_KEY` muda o caminho). Os agentes só aceitam atualizações assinadas por ela
-([ADR 0011](adr/0011-atualizacao-automatica.md)).
+([ADR 0011](DECISOES.md#adr-0011)).
 
 * 💾 **Faça uma cópia offline** (pendrive, cofre de senhas). Perdê-la obriga a reinstalar todos os
   agentes à mão uma vez.

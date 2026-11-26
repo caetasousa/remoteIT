@@ -38,6 +38,10 @@ var (
 	pEndPaint               = user32.NewProc("EndPaint")
 	pGetClientRect          = user32.NewProc("GetClientRect")
 	pFillRect               = user32.NewProc("FillRect")
+	pSetTimer               = user32.NewProc("SetTimer")
+	pKillTimer              = user32.NewProc("KillTimer")
+	pMoveWindow             = user32.NewProc("MoveWindow")
+	pValidateRect           = user32.NewProc("ValidateRect")
 	pDrawTextW              = user32.NewProc("DrawTextW")
 	pLoadCursorW            = user32.NewProc("LoadCursorW")
 	pSetCursor              = user32.NewProc("SetCursor")
@@ -96,6 +100,9 @@ var (
 const (
 	wmDestroy         = 0x0002
 	wmSize            = 0x0005
+	wmTimer           = 0x0113
+	wmNcHitTest       = 0x0084
+	htTransparent     = ^uintptr(0) // -1: o clique passa para a janela de baixo (a da sessão)
 	wmSetFocus        = 0x0007
 	wmClose           = 0x0010
 	wmPaint           = 0x000F
@@ -125,6 +132,7 @@ const (
 	wsPopup             = 0x80000000
 	wsVisible           = 0x10000000
 	wsChild             = 0x40000000
+	wsClipSiblings      = 0x04000000
 	wsTabStop           = 0x00010000
 	wsBorder            = 0x00800000
 	wsVScroll           = 0x00200000

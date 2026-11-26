@@ -2,11 +2,18 @@
 //
 // Três modos, todos com a mesma captura (DXGI Desktop Duplication):
 //
-//   RC_H264   D3D11 Video Processor (escala + BGRA->NV12 BT.709 16-235)
+//   RC_H264   D3D11 Video Processor (BGRA->NV12 BT.709 16-235)
 //             -> Media Foundation H.264 (NVENC / Intel QSV / AMD AMF; reserva: software da Microsoft)
 //   RC_AV1    o mesmo, com o encoder AV1 de hardware (sem reserva em software)
 //   RC_AVC444 shaders D3D11 montam as duas visões NV12 do AVC444 (BT.709 0-255,
 //             veja internal/avc444) -> DOIS encoders H.264 de hardware, um por visão
+//
+// Quando o técnico mostra a tela menor que a nativa (a janela dele), um
+// shader reduz a imagem antes, pela média da área (internal/scale.Area é a
+// referência): texto legível, sem o serrilhado do filtro do Video Processor.
+// A cada quadro, o DXGI informa o que mudou; isso vira uma grade de blocos
+// (rc_dirty) com que o lado Go manda sem perda só o que parou de mudar
+// (rc_still) e diz ao técnico onde o vídeo vale.
 //
 // A saída é Annex-B (H.264) ou OBUs (AV1), decodificada no navegador via
 // WebCodecs ou no visualizador nativo via Media Foundation.
@@ -86,6 +93,7 @@ static int d3dc_load(void) {
 #define RC_FORCE_KEY 1
 #define RC_REPEAT    2
 #define RC_RING      8
+#define RC_TILE      64 // lado do bloco da grade de mudanças, em pixels de saída
 
 #define RC_OK_FRAME   1
 #define RC_NOTHING    0
@@ -139,7 +147,15 @@ typedef struct rc_ctx {
 	LUID luid;
 	int left, top, dw, dh, ow, oh, fps, kbps;
 
-	ID3D11Texture2D *bgra;  // tela capturada (sem cursor, entra no encoder)
+	ID3D11Texture2D *bgra;  // tela capturada (sem cursor), no tamanho nativo
+	ID3D11ShaderResourceView *bgra_srv;
+	// tela no tamanho de saída: o próprio bgra sem redução, ou o resultado
+	// do shader de redução (scale_ps)
+	ID3D11Texture2D *rgb;
+	ID3D11RenderTargetView *rgb_rtv;
+	ID3D11PixelShader *ps_scale;
+	int scaled;
+	ID3D11Texture2D *still_stg; // leitura do rgb pela CPU (refresh sem perda)
 	// RC_H264 / RC_AV1: video processor BGRA -> NV12
 	ID3D11VideoProcessorEnumerator *vpe;
 	ID3D11VideoProcessor *vp;
@@ -159,6 +175,14 @@ typedef struct rc_ctx {
 	int nenc; // encoders em uso: 2 no AVC444, 1 nos outros
 	IMFDXGIDeviceManager *mgr;
 	UINT token;
+
+	// grade de mudanças desde o último rc_dirty, em blocos de RC_TILE pixels
+	// de saída (1 = mudou)
+	int tcols, trows;
+	uint8_t *tiles;
+	uint8_t *meta; // buffer dos retângulos que o DXGI informa
+	UINT meta_cap;
+	int enc_us; // captura + codificação do último quadro, em microssegundos
 
 	LARGE_INTEGER qpf, t0;
 	char name[200];
@@ -192,10 +216,10 @@ static HRESULT set_size(IMFMediaType *t, REFGUID k, UINT32 a, UINT32 b) {
 	return IMFMediaType_SetUINT64(t, k, ((UINT64)a << 32) | b);
 }
 
-static void capi_u4(ICodecAPI *api, const GUID *g, ULONG v) {
-	if (!api) return;
+static HRESULT capi_u4(ICodecAPI *api, const GUID *g, ULONG v) {
+	if (!api) return E_POINTER;
 	VARIANT var; VariantInit(&var); var.vt = VT_UI4; var.ulVal = v;
-	ICodecAPI_SetValue(api, g, &var);
+	return ICodecAPI_SetValue(api, g, &var);
 }
 static void capi_bool(ICodecAPI *api, const GUID *g, int v) {
 	if (!api) return;
@@ -229,6 +253,17 @@ static void free_encoder(rc_enc *e) {
 
 static const GUID *rc_subtype(rc_ctx *c) { return c->mode == RC_AV1 ? &MFVideoFormat_AV1 : &MFVideoFormat_H264; }
 
+// enc_buffers ajusta o bitrate e o buffer do controle de taxa. No H.264 do
+// Media Foundation o buffer (HRD) é em BYTES: 4 quadros de vídeo no bitrate
+// alvo (~67 ms a 60 fps). Um quadro nunca passa disso, então nenhum quadro
+// leva mais que ~67 ms para atravessar um link que dá conta do alvo. (O valor
+// antigo, kbps*125 bytes, era 1 s inteiro de vídeo.)
+static void enc_buffers(rc_ctx *c, rc_enc *e) {
+	capi_u4(e->api, &rcMeanBR, (ULONG)e->kbps * 1000);
+	capi_u4(e->api, &rcBufSize, (ULONG)((int64_t)e->kbps * 125 * 4 / (c->fps > 0 ? c->fps : 60)));
+	capi_u4(e->api, &rcMaxBR, (ULONG)e->kbps * 1500); // rajada de até 1,5x (keyframes)
+}
+
 // Configura um MFT já criado: tipos de mídia, baixa latência, sem B-frames, CBR.
 static HRESULT configure_mft(rc_ctx *c, rc_enc *e, char *err, int errlen) {
 	HRESULT hr;
@@ -253,13 +288,19 @@ static HRESULT configure_mft(rc_ctx *c, rc_enc *e, char *err, int errlen) {
 	IMFTransform_QueryInterface(e->mft, &IID_ICodecAPI, (void **)&e->api);
 	capi_bool(e->api, &rcLowLatency, 1);
 	capi_u4(e->api, &rcRateCtl, eAVEncCommonRateControlMode_CBR);
-	capi_u4(e->api, &rcMeanBR, (ULONG)e->kbps * 1000);
-	capi_u4(e->api, &rcGOP, (ULONG)c->fps);         // keyframe a cada 1s
-	capi_u4(e->api, &rcIRMode, 0);                  // sem intra-refresh: com bitrate alto não precisa
-	capi_u4(e->api, &rcBufSize, (ULONG)e->kbps * 125); // buffer VBV = 1 frame (~8ms) → latência mínima
-	capi_u4(e->api, &rcMaxBR, (ULONG)e->kbps * 1500); // permite rajadas de até 50% nos keyframes
+	// Sem keyframe periódico: sobre TCP nada se perde, e um keyframe numa tela
+	// de escritório custa centenas de vezes um quadro comum (pico de banda e
+	// de atraso a cada GOP). Keyframe só no começo e quando o técnico pede
+	// (rcForceKey). GOP 0 NÃO é infinito no Media Foundation ("o encoder
+	// escolhe"): vai o maior valor que o encoder aceitar.
+	static const ULONG gops[] = {65535, 32767, 3600};
+	for (int i = 0; i < 3 && capi_u4(e->api, &rcGOP, gops[i]) != S_OK; i++) {}
+	capi_u4(e->api, &rcIRMode, 0);
+	enc_buffers(c, e);
 	capi_u4(e->api, &rcBFrames, 0);
-	capi_u4(e->api, &rcQvS, 100); // 100 = prioriza velocidade (menor latência)
+	// 0-100: 0 = mais rápido, 100 = melhor qualidade (mais lento). Começa na
+	// qualidade; o lado Go baixa (rc_set_speed) se o encoder não der conta
+	capi_u4(e->api, &rcQvS, 100);
 
 	// tipo de saída primeiro (regra de encoders MF). H.264: tenta High ->
 	// Main -> Baseline. AV1: sem perfil (o encoder usa Main 8 bits) e, se
@@ -396,6 +437,13 @@ void rc_close(rc_ctx *c) {
 	REL(c->vs);
 	REL(c->rs);
 	REL(c->srv);
+	REL(c->ps_scale);
+	REL(c->rgb_rtv);
+	REL(c->rgb);
+	REL(c->still_stg);
+	REL(c->bgra_srv);
+	free(c->tiles);
+	free(c->meta);
 	REL(c->vin);
 	REL(c->vp);
 	REL(c->vpe);
@@ -429,8 +477,47 @@ void rc_set_bitrate(rc_ctx *c, int kbps) {
 	c->kbps = kbps;
 	for (int i = 0; i < c->nenc; i++) {
 		c->enc[i].kbps = enc_kbps(c, i);
-		capi_u4(c->enc[i].api, &rcMeanBR, (ULONG)c->enc[i].kbps * 1000);
+		enc_buffers(c, &c->enc[i]);
 	}
+}
+
+// rc_set_speed troca o equilíbrio qualidade x velocidade dos encoders: nível
+// 0 = melhor qualidade (100), 1 = equilíbrio (50), 2 = mais rápido (0).
+// Devolve 1 se todos aceitaram.
+int rc_set_speed(rc_ctx *c, int level) {
+	static const ULONG q[] = {100, 50, 0};
+	if (level < 0 || level > 2) return 0;
+	int ok = 1;
+	for (int i = 0; i < c->nenc; i++)
+		if (capi_u4(c->enc[i].api, &rcQvS, q[level]) != S_OK) ok = 0;
+	return ok;
+}
+
+int rc_encode_us(rc_ctx *c) { return c->enc_us; }
+void rc_native(rc_ctx *c, int *w, int *h) { *w = c->dw; *h = c->dh; }
+void rc_tiles(rc_ctx *c, int *cols, int *rows, int *size) { *cols = c->tcols; *rows = c->trows; *size = RC_TILE; }
+
+// rc_dirty junta (OU) em dst os blocos que mudaram desde a chamada anterior
+// e zera a grade.
+void rc_dirty(rc_ctx *c, uint8_t *dst, int n) {
+	int m = c->tcols * c->trows;
+	if (n > m) n = m;
+	for (int i = 0; i < n; i++) dst[i] |= c->tiles[i];
+	memset(c->tiles, 0, (size_t)m);
+}
+
+// rc_fit é internal/scale.Fit em C: tamanho de saída de uma tela w x h que
+// cabe em maxw x maxh (0 = sem limite), na mesma proporção, par, sem ampliar
+// e nunca abaixo de 320x180 de limite. Mude os dois juntos.
+static void rc_fit(int w, int h, int maxw, int maxh, int *ow, int *oh) {
+	if (maxw > 0 && maxw < 320) maxw = 320;
+	if (maxh > 0 && maxh < 180) maxh = 180;
+	int x = w, y = h;
+	if (maxw > 0 && x > maxw) { x = maxw; y = (int)((int64_t)h * maxw / w); }
+	if (maxh > 0 && y > maxh) { x = (int)((int64_t)w * maxh / h); y = maxh; }
+	x &= ~1; y &= ~1;
+	*ow = x < 2 ? 2 : x;
+	*oh = y < 2 ? 2 : y;
 }
 
 // Shaders do AVC444. A fórmula é a de internal/avc444 (ToYUV e Pack): mude
@@ -453,12 +540,30 @@ static const char rc_hlsl[] =
 	"  if (y < HALF) return uv(px(x, 2 * y + 1)).x / 255.0;\n"
 	"  return uv(px(x, 2 * (y - HALF) + 1)).y / 255.0;\n"
 	"}\n"
-	"float2 aux_uv(float4 p : SV_Position) : SV_Target { return uv(px(2 * (int)p.x + 1, 2 * (int)p.y)) / 255.0; }\n";
+	"float2 aux_uv(float4 p : SV_Position) : SV_Target { return uv(px(2 * (int)p.x + 1, 2 * (int)p.y)) / 255.0; }\n"
+	// redução pela média da área (internal/scale.Area): o pixel de saída cobre
+	// [x*FX, (x+1)*FX) x [y*FY, (y+1)*FY) da tela, e cada pixel da tela entra
+	// com o peso da fração coberta. TX x TY pixels de origem bastam (FX+1).
+	"float4 scale_ps(float4 p : SV_Position) : SV_Target {\n"
+	"  float x0 = floor(p.x) * FX, y0 = floor(p.y) * FY, x1 = x0 + FX, y1 = y0 + FY;\n"
+	"  int i0 = (int)floor(x0), j0 = (int)floor(y0);\n"
+	"  float4 acc = float4(0, 0, 0, 0);\n"
+	"  for (int j = 0; j < TY; j++) {\n"
+	"    float yy = (float)(j0 + j);\n"
+	"    float wy = max(0.0, min(yy + 1.0, y1) - max(yy, y0));\n"
+	"    for (int i = 0; i < TX; i++) {\n"
+	"      float xx = (float)(i0 + i);\n"
+	"      float wx = max(0.0, min(xx + 1.0, x1) - max(xx, x0));\n"
+	"      acc += src.Load(int3(min(i0 + i, SW - 1), min(j0 + j, SH - 1), 0)) * (wx * wy);\n"
+	"    }\n"
+	"  }\n"
+	"  return acc / (FX * FY);\n"
+	"}\n";
 
 static HRESULT compile(const char *entry, const char *target, const D3D_SHADER_MACRO *defs, ID3DBlob **code,
                        char *err, int errlen) {
 	ID3DBlob *msg = NULL;
-	HRESULT hr = rcD3DCompile(rc_hlsl, sizeof rc_hlsl - 1, "avc444.hlsl", defs, NULL, entry, target,
+	HRESULT hr = rcD3DCompile(rc_hlsl, sizeof rc_hlsl - 1, "rcenc.hlsl", defs, NULL, entry, target,
 	                         D3DCOMPILE_OPTIMIZATION_LEVEL3, 0, code, &msg);
 	if (FAILED(hr))
 		snprintf(err, errlen, "shader %s: 0x%08lx %s", entry, (unsigned long)hr,
@@ -467,22 +572,37 @@ static HRESULT compile(const char *entry, const char *target, const D3D_SHADER_M
 	return hr;
 }
 
-// create_shaders compila os shaders do AVC444 para a altura c->oh e prepara
-// a leitura da textura c->bgra.
-static int create_shaders(rc_ctx *c, char *err, int errlen) {
+// create_shaders compila o vertex shader e os pixel shaders pedidos: os
+// quatro do AVC444 (para a altura c->oh) e o de redução (de c->dw x c->dh
+// para c->ow x c->oh).
+static int create_shaders(rc_ctx *c, int avc444, int scale, char *err, int errlen) {
 	HRESULT hr;
 	ID3DBlob *code = NULL;
 	if (d3dc_load() != 1) { snprintf(err, errlen, "d3dcompiler_47.dll indisponível"); return -1; }
-	char half[16];
+	double fx = (double)c->dw / c->ow, fy = (double)c->dh / c->oh;
+	char half[16], sfx[32], sfy[32], tx[8], ty[8], sw[16], sh[16];
 	snprintf(half, sizeof half, "%d", c->oh / 2);
-	D3D_SHADER_MACRO defs[] = {{"HALF", half}, {NULL, NULL}};
-	CHK(compile("vs", "vs_4_0", defs, &code, err, errlen), "compilar vs");
+	snprintf(sfx, sizeof sfx, "%.9g", fx);
+	snprintf(sfy, sizeof sfy, "%.9g", fy);
+	snprintf(tx, sizeof tx, "%d", (int)fx + 2); // cobre [x0, x0+FX) com x0 fracionário
+	snprintf(ty, sizeof ty, "%d", (int)fy + 2);
+	snprintf(sw, sizeof sw, "%d", c->dw);
+	snprintf(sh, sizeof sh, "%d", c->dh);
+	D3D_SHADER_MACRO defs[] = {{"HALF", half}, {"FX", sfx}, {"FY", sfy}, {"TX", tx}, {"TY", ty},
+	                           {"SW", sw}, {"SH", sh}, {NULL, NULL}};
+	// compile já escreve em err a mensagem do compilador: não sobrescreve
+	if (FAILED(compile("vs", "vs_4_0", defs, &code, err, errlen))) goto fail;
 	CHK(ID3D11Device_CreateVertexShader(c->dev, ID3D10Blob_GetBufferPointer(code), ID3D10Blob_GetBufferSize(code), NULL, &c->vs), "CreateVertexShader");
 	REL(code);
 	static const char *entries[4] = {"main_y", "main_uv", "aux_y", "aux_uv"};
-	for (int i = 0; i < 4; i++) {
-		CHK(compile(entries[i], "ps_4_0", defs, &code, err, errlen), "compilar ps");
+	for (int i = 0; avc444 && i < 4; i++) {
+		if (FAILED(compile(entries[i], "ps_4_0", defs, &code, err, errlen))) goto fail;
 		CHK(ID3D11Device_CreatePixelShader(c->dev, ID3D10Blob_GetBufferPointer(code), ID3D10Blob_GetBufferSize(code), NULL, &c->ps[i]), "CreatePixelShader");
+		REL(code);
+	}
+	if (scale) {
+		if (FAILED(compile("scale_ps", "ps_4_0", defs, &code, err, errlen))) goto fail;
+		CHK(ID3D11Device_CreatePixelShader(c->dev, ID3D10Blob_GetBufferPointer(code), ID3D10Blob_GetBufferSize(code), NULL, &c->ps_scale), "CreatePixelShader scale");
 		REL(code);
 	}
 	D3D11_RASTERIZER_DESC rd;
@@ -491,16 +611,55 @@ static int create_shaders(rc_ctx *c, char *err, int errlen) {
 	rd.CullMode = D3D11_CULL_NONE;
 	rd.DepthClipEnable = TRUE;
 	CHK(ID3D11Device_CreateRasterizerState(c->dev, &rd, &c->rs), "RasterizerState");
+	return 0;
+fail:
+	REL(code);
+	return -1;
+}
+
+// bgra_view cria a leitura de uma textura BGRA pelos shaders.
+static HRESULT bgra_view(rc_ctx *c, ID3D11Texture2D *tex, ID3D11ShaderResourceView **srv) {
 	D3D11_SHADER_RESOURCE_VIEW_DESC sd;
 	memset(&sd, 0, sizeof sd);
 	sd.Format = DXGI_FORMAT_B8G8R8A8_UNORM;
 	sd.ViewDimension = D3D11_SRV_DIMENSION_TEXTURE2D;
 	sd.Texture2D.MipLevels = 1;
-	CHK(ID3D11Device_CreateShaderResourceView(c->dev, (ID3D11Resource *)c->bgra, &sd, &c->srv), "SRV da tela");
+	return ID3D11Device_CreateShaderResourceView(c->dev, (ID3D11Resource *)tex, &sd, srv);
+}
+
+// setup_scale cria a textura da tela reduzida (c->rgb) e a vista de desenho
+// nela. Os shaders já devem estar compilados.
+static int setup_scale(rc_ctx *c, char *err, int errlen) {
+	HRESULT hr;
+	D3D11_TEXTURE2D_DESC td;
+	memset(&td, 0, sizeof td);
+	td.Width = c->ow; td.Height = c->oh; td.MipLevels = 1; td.ArraySize = 1;
+	td.Format = DXGI_FORMAT_B8G8R8A8_UNORM; td.SampleDesc.Count = 1; td.Usage = D3D11_USAGE_DEFAULT;
+	td.BindFlags = D3D11_BIND_RENDER_TARGET | D3D11_BIND_SHADER_RESOURCE;
+	CHK(ID3D11Device_CreateTexture2D(c->dev, &td, NULL, &c->rgb), "textura reduzida");
+	CHK(ID3D11Device_CreateRenderTargetView(c->dev, (ID3D11Resource *)c->rgb, NULL, &c->rgb_rtv), "RTV reduzida");
 	return 0;
 fail:
-	REL(code);
 	return -1;
+}
+
+// draw_scale reduz a tela capturada (c->bgra) para c->rgb.
+static void draw_scale(rc_ctx *c) {
+	ID3D11DeviceContext *x = c->ctx;
+	ID3D11DeviceContext_IASetPrimitiveTopology(x, D3D11_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
+	ID3D11DeviceContext_IASetInputLayout(x, NULL);
+	ID3D11DeviceContext_VSSetShader(x, c->vs, NULL, 0);
+	ID3D11DeviceContext_RSSetState(x, c->rs);
+	ID3D11DeviceContext_PSSetShaderResources(x, 0, 1, &c->bgra_srv);
+	ID3D11DeviceContext_PSSetShader(x, c->ps_scale, NULL, 0);
+	D3D11_VIEWPORT vp = {0, 0, (FLOAT)c->ow, (FLOAT)c->oh, 0, 1};
+	ID3D11DeviceContext_OMSetRenderTargets(x, 1, &c->rgb_rtv, NULL);
+	ID3D11DeviceContext_RSSetViewports(x, 1, &vp);
+	ID3D11DeviceContext_Draw(x, 3, 0);
+	ID3D11RenderTargetView *none = NULL;
+	ID3D11ShaderResourceView *nosrv = NULL;
+	ID3D11DeviceContext_OMSetRenderTargets(x, 1, &none, NULL);
+	ID3D11DeviceContext_PSSetShaderResources(x, 0, 1, &nosrv);
 }
 
 // setup_avc444 prepara os shaders e as visões de render target nos planos
@@ -512,7 +671,6 @@ static int setup_avc444(rc_ctx *c, char *err, int errlen) {
 		snprintf(err, errlen, "GPU não desenha em NV12");
 		return -1;
 	}
-	if (create_shaders(c, err, errlen) != 0) return -1;
 	D3D11_RENDER_TARGET_VIEW_DESC rv;
 	memset(&rv, 0, sizeof rv);
 	rv.ViewDimension = D3D11_RTV_DIMENSION_TEXTURE2D;
@@ -559,6 +717,56 @@ static void draw_avc444(rc_ctx *c, int slot) {
 	draw_passes(c, rtv);
 }
 
+// selftest_device cria o dispositivo dos testes: a GPU, ou o rasterizador
+// em software do Windows (WARP) sem ela.
+static int selftest_device(rc_ctx *c, char *err, int errlen) {
+	HRESULT hr;
+	D3D_FEATURE_LEVEL lv[] = {D3D_FEATURE_LEVEL_11_0, D3D_FEATURE_LEVEL_10_1, D3D_FEATURE_LEVEL_10_0};
+	hr = D3D11CreateDevice(NULL, D3D_DRIVER_TYPE_HARDWARE, NULL, D3D11_CREATE_DEVICE_BGRA_SUPPORT, lv, 3, D3D11_SDK_VERSION, &c->dev, NULL, &c->ctx);
+	if (FAILED(hr))
+		hr = D3D11CreateDevice(NULL, D3D_DRIVER_TYPE_WARP, NULL, D3D11_CREATE_DEVICE_BGRA_SUPPORT, lv, 3, D3D11_SDK_VERSION, &c->dev, NULL, &c->ctx);
+	CHK(hr, "D3D11CreateDevice");
+	return 0;
+fail:
+	return -1;
+}
+
+// rc_scale_selftest reduz a imagem bgra (sw x sh) para dw x dh com o shader
+// de redução e copia o resultado (BGRA) para out. O teste
+// (scale_windows_test.go) compara com internal/scale.Area, no Windows ou no
+// Wine.
+int rc_scale_selftest(int sw, int sh, const uint8_t *bgra, int dw, int dh, uint8_t *out, char *err, int errlen) {
+	HRESULT hr;
+	rc_ctx *c = calloc(1, sizeof *c);
+	ID3D11Texture2D *stg = NULL;
+	int ret = -1;
+	c->dw = sw; c->dh = sh; c->ow = dw; c->oh = dh;
+	if (selftest_device(c, err, errlen) != 0) goto done;
+	D3D11_TEXTURE2D_DESC td;
+	memset(&td, 0, sizeof td);
+	td.Width = sw; td.Height = sh; td.MipLevels = 1; td.ArraySize = 1;
+	td.Format = DXGI_FORMAT_B8G8R8A8_UNORM; td.SampleDesc.Count = 1; td.Usage = D3D11_USAGE_DEFAULT;
+	td.BindFlags = D3D11_BIND_SHADER_RESOURCE;
+	D3D11_SUBRESOURCE_DATA init = {bgra, (UINT)sw * 4, 0};
+	CHK(ID3D11Device_CreateTexture2D(c->dev, &td, &init, &c->bgra), "textura de entrada");
+	CHK(bgra_view(c, c->bgra, &c->bgra_srv), "SRV da tela");
+	if (create_shaders(c, 0, 1, err, errlen) != 0 || setup_scale(c, err, errlen) != 0) goto done;
+	draw_scale(c);
+	td.Width = dw; td.Height = dh; td.Usage = D3D11_USAGE_STAGING; td.BindFlags = 0; td.CPUAccessFlags = D3D11_CPU_ACCESS_READ;
+	CHK(ID3D11Device_CreateTexture2D(c->dev, &td, NULL, &stg), "textura de leitura");
+	ID3D11DeviceContext_CopyResource(c->ctx, (ID3D11Resource *)stg, (ID3D11Resource *)c->rgb);
+	D3D11_MAPPED_SUBRESOURCE m;
+	CHK(ID3D11DeviceContext_Map(c->ctx, (ID3D11Resource *)stg, 0, D3D11_MAP_READ, 0, &m), "Map");
+	for (int y = 0; y < dh; y++) memcpy(out + (size_t)y * dw * 4, (uint8_t *)m.pData + (size_t)y * m.RowPitch, (size_t)dw * 4);
+	ID3D11DeviceContext_Unmap(c->ctx, (ID3D11Resource *)stg, 0);
+	ret = 0;
+fail:
+done:
+	REL(stg);
+	rc_close(c);
+	return ret;
+}
+
 // rc_avc444_selftest roda os shaders do AVC444 sobre a imagem bgra (w x h,
 // pares) em texturas comuns R8/R8G8 e copia o resultado para out: visão
 // principal e depois a auxiliar, as duas em NV12 contíguo (2 * w*h*3/2
@@ -571,12 +779,8 @@ int rc_avc444_selftest(int w, int h, const uint8_t *bgra, uint8_t *out, char *er
 	ID3D11Texture2D *tex[4] = {0}, *stg[4] = {0};
 	ID3D11RenderTargetView *rtv[4] = {0};
 	int ret = -1;
-	c->ow = w; c->oh = h;
-	D3D_FEATURE_LEVEL lv[] = {D3D_FEATURE_LEVEL_11_0, D3D_FEATURE_LEVEL_10_1, D3D_FEATURE_LEVEL_10_0};
-	hr = D3D11CreateDevice(NULL, D3D_DRIVER_TYPE_HARDWARE, NULL, D3D11_CREATE_DEVICE_BGRA_SUPPORT, lv, 3, D3D11_SDK_VERSION, &c->dev, NULL, &c->ctx);
-	if (FAILED(hr)) // sem GPU: o rasterizador em software do Windows
-		hr = D3D11CreateDevice(NULL, D3D_DRIVER_TYPE_WARP, NULL, D3D11_CREATE_DEVICE_BGRA_SUPPORT, lv, 3, D3D11_SDK_VERSION, &c->dev, NULL, &c->ctx);
-	CHK(hr, "D3D11CreateDevice");
+	c->ow = c->dw = w; c->oh = c->dh = h;
+	if (selftest_device(c, err, errlen) != 0) goto done;
 	D3D11_TEXTURE2D_DESC td;
 	memset(&td, 0, sizeof td);
 	td.Width = w; td.Height = h; td.MipLevels = 1; td.ArraySize = 1;
@@ -584,7 +788,8 @@ int rc_avc444_selftest(int w, int h, const uint8_t *bgra, uint8_t *out, char *er
 	td.BindFlags = D3D11_BIND_SHADER_RESOURCE;
 	D3D11_SUBRESOURCE_DATA init = {bgra, (UINT)w * 4, 0};
 	CHK(ID3D11Device_CreateTexture2D(c->dev, &td, &init, &c->bgra), "textura de entrada");
-	if (create_shaders(c, err, errlen) != 0) goto done;
+	if (create_shaders(c, 1, 0, err, errlen) != 0) goto done;
+	CHK(bgra_view(c, c->bgra, &c->srv), "SRV da tela");
 	for (int i = 0; i < 4; i++) {
 		int uv = i % 2;
 		td.Width = uv ? w / 2 : w; td.Height = uv ? h / 2 : h;
@@ -615,7 +820,9 @@ done:
 	return ret;
 }
 
-int rc_open(rc_ctx **outp, int mode, int maxw, int fps, int kbps, int allow_hw, char *err, int errlen) {
+// rc_open abre captura + encoder. A tela sai reduzida para caber em maxw x
+// maxh (0 = sem limite), mantendo a proporção (rc_fit).
+int rc_open(rc_ctx **outp, int mode, int maxw, int maxh, int fps, int kbps, int allow_hw, char *err, int errlen) {
 	HRESULT hr;
 	rc_ctx *c = calloc(1, sizeof *c);
 	IDXGIDevice *xdev = NULL;
@@ -633,7 +840,6 @@ int rc_open(rc_ctx **outp, int mode, int maxw, int fps, int kbps, int allow_hw, 
 	// cada visão do AVC444 tem o próprio anel: 4 slots bastam para o encoder
 	// assíncrono e economizam memória de vídeo (são 2 texturas por slot)
 	c->ringn = mode == RC_AVC444 ? 4 : RC_RING;
-	if (mode == RC_AVC444) maxw = 0; // 4:4:4 só faz sentido na resolução nativa
 
 	if (mf_load() != 1) {
 		snprintf(err, errlen, "Media Foundation indisponível (Windows N?)");
@@ -679,9 +885,13 @@ int rc_open(rc_ctx **outp, int mode, int maxw, int fps, int kbps, int allow_hw, 
 	c->top = od.DesktopCoordinates.top;
 	c->dw = dd.ModeDesc.Width;
 	c->dh = dd.ModeDesc.Height;
-	c->ow = c->dw; c->oh = c->dh;
-	if (maxw > 0 && c->ow > maxw) { c->ow = maxw; c->oh = (int)((int64_t)c->dh * maxw / c->dw); }
-	c->ow &= ~1; c->oh &= ~1;
+	rc_fit(c->dw, c->dh, maxw, maxh, &c->ow, &c->oh);
+	c->scaled = c->ow != c->dw || c->oh != c->dh;
+	c->tcols = (c->ow + RC_TILE - 1) / RC_TILE;
+	c->trows = (c->oh + RC_TILE - 1) / RC_TILE;
+	c->tiles = malloc((size_t)c->tcols * c->trows);
+	if (!c->tiles) { snprintf(err, errlen, "sem memória"); goto fail_noset; }
+	memset(c->tiles, 1, (size_t)c->tcols * c->trows); // o 1º quadro é a tela inteira
 
 	D3D11_TEXTURE2D_DESC td;
 	memset(&td, 0, sizeof td);
@@ -690,6 +900,31 @@ int rc_open(rc_ctx **outp, int mode, int maxw, int fps, int kbps, int allow_hw, 
 	td.BindFlags = D3D11_BIND_RENDER_TARGET | D3D11_BIND_SHADER_RESOURCE;
 	td.MiscFlags = 0;
 	CHK(ID3D11Device_CreateTexture2D(c->dev, &td, NULL, &c->bgra), "textura BGRA");
+	CHK(bgra_view(c, c->bgra, &c->bgra_srv), "SRV da tela");
+
+	// Shaders: os do AVC444 e o de redução. Sem o compilador de shaders, o
+	// AVC444 não abre e o H.264/AV1 reduz pelo Video Processor (filtro pior,
+	// mas funciona): scaled = 2.
+	if (mode == RC_AVC444 || c->scaled) {
+		char serr[200] = "";
+		if (create_shaders(c, mode == RC_AVC444, c->scaled, serr, sizeof serr) == 0 &&
+		    (!c->scaled || setup_scale(c, serr, sizeof serr) == 0)) {
+			// pronto
+		} else if (mode == RC_AVC444) {
+			snprintf(err, errlen, "%s", serr);
+			goto fail_noset;
+		} else {
+			c->scaled = 2;
+		}
+	}
+	if (c->scaled != 1) { // sem redução própria: a saída lê a própria tela
+		c->rgb = c->bgra;
+		ID3D11Texture2D_AddRef(c->rgb);
+	}
+	if (mode == RC_AVC444) {
+		if (c->scaled) CHK(bgra_view(c, c->rgb, &c->srv), "SRV da tela reduzida");
+		else { c->srv = c->bgra_srv; ID3D11ShaderResourceView_AddRef(c->srv); }
+	}
 
 	// texturas NV12 que entram no encoder: 1 visão, ou 2 no AVC444
 	td.Width = c->ow; td.Height = c->oh; td.Format = DXGI_FORMAT_NV12;
@@ -716,7 +951,10 @@ int rc_open(rc_ctx **outp, int mode, int maxw, int fps, int kbps, int allow_hw, 
 		memset(&cd, 0, sizeof cd);
 		cd.InputFrameFormat = D3D11_VIDEO_FRAME_FORMAT_PROGRESSIVE;
 		cd.InputFrameRate.Numerator = fps; cd.InputFrameRate.Denominator = 1;
-		cd.InputWidth = c->dw; cd.InputHeight = c->dh;
+		// a entrada já vem reduzida pelo shader (scaled 1); no scaled 2 o
+		// Video Processor reduz a tela nativa
+		int iw = c->scaled == 1 ? c->ow : c->dw, ih = c->scaled == 1 ? c->oh : c->dh;
+		cd.InputWidth = iw; cd.InputHeight = ih;
 		cd.OutputFrameRate.Numerator = fps; cd.OutputFrameRate.Denominator = 1;
 		cd.OutputWidth = c->ow; cd.OutputHeight = c->oh;
 		cd.Usage = D3D11_VIDEO_USAGE_OPTIMAL_SPEED;
@@ -725,7 +963,7 @@ int rc_open(rc_ctx **outp, int mode, int maxw, int fps, int kbps, int allow_hw, 
 		D3D11_VIDEO_PROCESSOR_INPUT_VIEW_DESC ivd;
 		memset(&ivd, 0, sizeof ivd);
 		ivd.ViewDimension = D3D11_VPIV_DIMENSION_TEXTURE2D;
-		CHK(ID3D11VideoDevice_CreateVideoProcessorInputView(c->vdev, (ID3D11Resource *)c->bgra, c->vpe, &ivd, &c->vin), "InputView");
+		CHK(ID3D11VideoDevice_CreateVideoProcessorInputView(c->vdev, (ID3D11Resource *)(c->scaled == 1 ? c->rgb : c->bgra), c->vpe, &ivd, &c->vin), "InputView");
 		D3D11_VIDEO_PROCESSOR_OUTPUT_VIEW_DESC ovd;
 		memset(&ovd, 0, sizeof ovd);
 		ovd.ViewDimension = D3D11_VPOV_DIMENSION_TEXTURE2D;
@@ -742,7 +980,7 @@ int rc_open(rc_ctx **outp, int mode, int maxw, int fps, int kbps, int allow_hw, 
 		ID3D11VideoContext_VideoProcessorSetOutputColorSpace(c->vctx, c->vp, &ocs);
 		ID3D11VideoContext_VideoProcessorSetStreamFrameFormat(c->vctx, c->vp, 0, D3D11_VIDEO_FRAME_FORMAT_PROGRESSIVE);
 		ID3D11VideoContext_VideoProcessorSetStreamAutoProcessingMode(c->vctx, c->vp, 0, FALSE);
-		RECT sr = {0, 0, c->dw, c->dh}, dr = {0, 0, c->ow, c->oh};
+		RECT sr = {0, 0, iw, ih}, dr = {0, 0, c->ow, c->oh};
 		ID3D11VideoContext_VideoProcessorSetStreamSourceRect(c->vctx, c->vp, 0, TRUE, &sr);
 		ID3D11VideoContext_VideoProcessorSetStreamDestRect(c->vctx, c->vp, 0, TRUE, &dr);
 		ID3D11VideoContext_VideoProcessorSetOutputTargetRect(c->vctx, c->vp, TRUE, &dr);
@@ -970,19 +1208,93 @@ static void rc_cursor_pos(rc_ctx *c, int *x, int *y, int *vis) {
 	}
 }
 
+// mark_tiles marca os blocos de saída que encostam no retângulo [l,r) x
+// [t,b) da tela nativa, com 1 pixel de folga (a redução mistura vizinhos).
+static void mark_tiles(rc_ctx *c, LONG l, LONG t, LONG r, LONG b) {
+	if (r <= l || b <= t) return;
+	int x0 = (int)((int64_t)l * c->ow / c->dw) - 1;
+	int y0 = (int)((int64_t)t * c->oh / c->dh) - 1;
+	int x1 = (int)(((int64_t)r * c->ow + c->dw - 1) / c->dw) + 1;
+	int y1 = (int)(((int64_t)b * c->oh + c->dh - 1) / c->dh) + 1;
+	if (x0 < 0) x0 = 0;
+	if (y0 < 0) y0 = 0;
+	if (x1 > c->ow) x1 = c->ow;
+	if (y1 > c->oh) y1 = c->oh;
+	if (x1 <= x0 || y1 <= y0) return;
+	for (int ty = y0 / RC_TILE; ty <= (y1 - 1) / RC_TILE; ty++)
+		for (int tx = x0 / RC_TILE; tx <= (x1 - 1) / RC_TILE; tx++)
+			c->tiles[ty * c->tcols + tx] = 1;
+}
+
+static void mark_all(rc_ctx *c) { memset(c->tiles, 1, (size_t)c->tcols * c->trows); }
+
+// collect_dirty lê o que o DXGI diz que mudou neste quadro (retângulos
+// movidos e sujos) e marca os blocos. Sem a informação, marca a tela toda:
+// errar para mais só gasta um retalho, errar para menos deixaria o técnico
+// com uma parte velha da tela.
+static void collect_dirty(rc_ctx *c, const DXGI_OUTDUPL_FRAME_INFO *fi) {
+	UINT need = fi->TotalMetadataBufferSize, got = 0;
+	if (need == 0) { mark_all(c); return; }
+	if (c->meta_cap < need) {
+		uint8_t *m = realloc(c->meta, need);
+		if (!m) { mark_all(c); return; }
+		c->meta = m;
+		c->meta_cap = need;
+	}
+	if (FAILED(IDXGIOutputDuplication_GetFrameMoveRects(c->dup, c->meta_cap, (DXGI_OUTDUPL_MOVE_RECT *)c->meta, &got))) {
+		mark_all(c);
+		return;
+	}
+	DXGI_OUTDUPL_MOVE_RECT *mv = (DXGI_OUTDUPL_MOVE_RECT *)c->meta;
+	for (UINT i = 0; i < got / sizeof *mv; i++) {
+		RECT d = mv[i].DestinationRect;
+		LONG sx = mv[i].SourcePoint.x, sy = mv[i].SourcePoint.y;
+		mark_tiles(c, d.left, d.top, d.right, d.bottom);
+		mark_tiles(c, sx, sy, sx + (d.right - d.left), sy + (d.bottom - d.top));
+	}
+	got = 0;
+	if (FAILED(IDXGIOutputDuplication_GetFrameDirtyRects(c->dup, c->meta_cap, (RECT *)c->meta, &got))) {
+		mark_all(c);
+		return;
+	}
+	RECT *dr = (RECT *)c->meta;
+	for (UINT i = 0; i < got / sizeof *dr; i++) mark_tiles(c, dr[i].left, dr[i].top, dr[i].right, dr[i].bottom);
+}
+
 // Espera até timeout_ms por mudança na tela e codifica.
 // flags: RC_FORCE_KEY (keyframe), RC_REPEAT (re-codifica o último quadro se a tela não mudou; melhora a nitidez parada).
 // Retorna RC_OK_FRAME (pelo menos um encoder tem saída: leia com rc_output),
 // RC_NOTHING, RC_REOPEN (desktop trocou: UAC/bloqueio/resolução) ou RC_ERR.
+//
+// O DXGI acorda também quando só o mouse mexeu (o cursor não faz parte da
+// imagem): isso conta como "nada mudou". Codificar a mesma imagem de novo só
+// gastava banda, uma vaga do controle de fluxo e adiava o refresh sem perda;
+// a posição do cursor vai à parte (rc_cursor_pos).
 int rc_frame(rc_ctx *c, int timeout_ms, int flags) {
 	DXGI_OUTDUPL_FRAME_INFO fi;
 	IDXGIResource *res = NULL;
 	ID3D11Texture2D *tex = NULL;
-	int slot, r;
+	LARGE_INTEGER t0, t1;
+	int slot, r, image = 0;
 	for (int i = 0; i < c->nenc; i++) { c->enc[i].out_len = 0; c->enc[i].out_key = 0; }
 
 	HRESULT hr = IDXGIOutputDuplication_AcquireNextFrame(c->dup, timeout_ms, &fi, &res);
-	if (hr == DXGI_ERROR_WAIT_TIMEOUT) {
+	if (hr == DXGI_ERROR_ACCESS_LOST || hr == DXGI_ERROR_INVALID_CALL) return RC_REOPEN;
+	if (FAILED(hr) && hr != DXGI_ERROR_WAIT_TIMEOUT) return RC_ERR;
+	QueryPerformanceCounter(&t0);
+	if (SUCCEEDED(hr)) {
+		image = fi.LastPresentTime.QuadPart != 0 || !c->have_last;
+		if (image) {
+			collect_dirty(c, &fi);
+			if (SUCCEEDED(IDXGIResource_QueryInterface(res, &IID_ID3D11Texture2D, (void **)&tex))) {
+				ID3D11DeviceContext_CopyResource(c->ctx, (ID3D11Resource*)c->bgra, (ID3D11Resource*)tex);
+				REL(tex);
+			}
+		}
+		REL(res);
+		IDXGIOutputDuplication_ReleaseFrame(c->dup);
+	}
+	if (!image) {
 		if (!(flags & (RC_FORCE_KEY | RC_REPEAT)) || !c->have_last) {
 			int got = 0;
 			for (int i = 0; i < c->nenc; i++) // entrega saídas atrasadas do encoder
@@ -990,19 +1302,10 @@ int rc_frame(rc_ctx *c, int timeout_ms, int flags) {
 			return got ? RC_OK_FRAME : RC_NOTHING;
 		}
 		slot = c->last;
-	} else if (hr == DXGI_ERROR_ACCESS_LOST || hr == DXGI_ERROR_INVALID_CALL) {
-		return RC_REOPEN;
-	} else if (FAILED(hr)) {
-		return RC_ERR;
 	} else {
-		if (SUCCEEDED(IDXGIResource_QueryInterface(res, &IID_ID3D11Texture2D, (void **)&tex))) {
-			ID3D11DeviceContext_CopyResource(c->ctx, (ID3D11Resource*)c->bgra, (ID3D11Resource*)tex);
-			REL(tex);
-		}
-		REL(res);
-		IDXGIOutputDuplication_ReleaseFrame(c->dup);
 		slot = c->ring;
 		c->ring = (c->ring + 1) % c->ringn;
+		if (c->scaled == 1) draw_scale(c);
 		if (c->mode == RC_AVC444) {
 			draw_avc444(c, slot);
 		} else {
@@ -1016,10 +1319,39 @@ int rc_frame(rc_ctx *c, int timeout_ms, int flags) {
 		c->have_last = 1;
 	}
 	r = encode_slot(c, slot, flags & RC_FORCE_KEY);
+	QueryPerformanceCounter(&t1);
+	c->enc_us = (int)((t1.QuadPart - t0.QuadPart) * 1000000 / c->qpf.QuadPart);
 	if (r < 0) return r;
 	for (int i = 0; i < c->nenc; i++)
 		if (c->enc[i].out_len > 0) return RC_OK_FRAME;
 	return RC_NOTHING;
+}
+
+// rc_still copia o retângulo (x, y, w, h) da tela no tamanho de saída para
+// out, em RGBA (w*h*4 bytes, alfa 255), para o retalho sem perda. Devolve
+// -1 se não der (fora do quadro, ou a redução é a do Video Processor, cujo
+// resultado não fica numa textura legível).
+int rc_still(rc_ctx *c, int x, int y, int w, int h, uint8_t *out) {
+	if (c->scaled == 2 || x < 0 || y < 0 || w <= 0 || h <= 0 || x + w > c->ow || y + h > c->oh) return -1;
+	if (!c->still_stg) {
+		D3D11_TEXTURE2D_DESC td;
+		memset(&td, 0, sizeof td);
+		td.Width = c->ow; td.Height = c->oh; td.MipLevels = 1; td.ArraySize = 1;
+		td.Format = DXGI_FORMAT_B8G8R8A8_UNORM; td.SampleDesc.Count = 1;
+		td.Usage = D3D11_USAGE_STAGING; td.CPUAccessFlags = D3D11_CPU_ACCESS_READ;
+		if (FAILED(ID3D11Device_CreateTexture2D(c->dev, &td, NULL, &c->still_stg))) return -1;
+	}
+	D3D11_BOX box = {(UINT)x, (UINT)y, 0, (UINT)(x + w), (UINT)(y + h), 1};
+	ID3D11DeviceContext_CopySubresourceRegion(c->ctx, (ID3D11Resource *)c->still_stg, 0, x, y, 0, (ID3D11Resource *)c->rgb, 0, &box);
+	D3D11_MAPPED_SUBRESOURCE m;
+	if (FAILED(ID3D11DeviceContext_Map(c->ctx, (ID3D11Resource *)c->still_stg, 0, D3D11_MAP_READ, 0, &m))) return -1;
+	for (int row = 0; row < h; row++) {
+		const uint8_t *s = (const uint8_t *)m.pData + (size_t)(y + row) * m.RowPitch + (size_t)x * 4;
+		uint8_t *d = out + (size_t)row * w * 4;
+		for (int i = 0; i < w; i++, s += 4, d += 4) { d[0] = s[2]; d[1] = s[1]; d[2] = s[0]; d[3] = 255; }
+	}
+	ID3D11DeviceContext_Unmap(c->ctx, (ID3D11Resource *)c->still_stg, 0);
+	return 0;
 }
 
 // rc_output devolve a saída do encoder i (0 = principal, 1 = auxiliar no

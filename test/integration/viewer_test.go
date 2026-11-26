@@ -5,10 +5,12 @@ package integration
 import (
 	"context"
 	"errors"
+	"net/http/httptest"
 	"sync"
 	"testing"
 
 	"remoteit/internal/protocol"
+	"remoteit/internal/relay/httpapi"
 	viewer "remoteit/internal/viewer/client"
 )
 
@@ -35,8 +37,9 @@ func (h *recordingHandler) Stats(protocol.Stats) {
 	h.stats++
 	h.mu.Unlock()
 }
-func (h *recordingHandler) Cursor(int, int, bool) {}
-func (h *recordingHandler) CursorShape(string)    {}
+func (h *recordingHandler) Region(protocol.Region) {}
+func (h *recordingHandler) Cursor(int, int, bool)  {}
+func (h *recordingHandler) CursorShape(string)     {}
 func (h *recordingHandler) count() (frames, stats int) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
@@ -78,7 +81,7 @@ func TestNativeViewerClient(t *testing.T) {
 
 	// o visualizador oferece 4:4:4, AV1 e H.264; o agente de teste só tem
 	// JPEG e precisa cair nele sem travar a negociação
-	s, err := api.Dial(ctx, "pc1", viewer.Codecs(true, true, true), "quality")
+	s, err := api.Dial(ctx, "pc1", viewer.Codecs(true, true, true), viewer.View{Preset: "quality"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -122,7 +125,7 @@ func TestNativeViewerClient(t *testing.T) {
 	if l, _ := bia.Machines(ctx); len(l) != 0 {
 		t.Errorf("bia vê máquinas alheias: %+v", l)
 	}
-	if _, err := bia.Dial(ctx, "pc1", viewer.Codecs(true, false, false), "quality"); err == nil {
+	if _, err := bia.Dial(ctx, "pc1", viewer.Codecs(true, false, false), viewer.View{Preset: "quality"}); err == nil {
 		t.Error("bia abriu a tela de uma máquina que não é dela")
 	}
 
@@ -130,4 +133,50 @@ func TestNativeViewerClient(t *testing.T) {
 	if _, err := again.Me(ctx); !errors.Is(err, viewer.ErrUnauthorized) {
 		t.Errorf("depois do logout: %v, want ErrUnauthorized", err)
 	}
+}
+
+// lastFrame devolve o último quadro recebido.
+func (h *recordingHandler) lastFrame() (protocol.FrameHeader, bool) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	if len(h.frames) == 0 {
+		return protocol.FrameHeader{}, false
+	}
+	return h.frames[len(h.frames)-1], true
+}
+
+// Com RELAY_LOCAL_URL, o visualizador descobre o endereço local do relay,
+// confere que é o mesmo processo e abre a tela por ele (sem a volta pela
+// internet). E o vídeo vem no tamanho da área que o técnico informa: o
+// agente reduz a tela sintética de 640x360 para 320x180, e volta à nativa
+// no "Tamanho real" (0 x 0).
+func TestNativeViewerLocalRouteAndViewport(t *testing.T) {
+	local := httptest.NewUnstartedServer(nil)
+	localURL := "http://" + local.Listener.Addr().String()
+	e := newEnv(t, func(c *httpapi.Config) { c.LocalURL = localURL })
+	local.Config.Handler = e.srv.Config.Handler // o mesmo relay, por outra porta
+	local.Start()
+	t.Cleanup(local.Close)
+	e.realAgent("pc1", func(string) bool { return true }, &recordingInjector{})
+
+	api, _ := viewer.New(e.srv.URL)
+	ctx := t.Context()
+	if _, err := api.Login(ctx, adminUser, adminPass); err != nil {
+		t.Fatal(err)
+	}
+	route := api.LocalRoute(ctx)
+	if route == nil || route.String() != localURL {
+		t.Fatalf("rota local = %v, quero %s", route, localURL)
+	}
+	s, err := api.DialVia(ctx, route, "pc1", viewer.Codecs(true, false, false), viewer.View{Preset: "quality", W: 320, H: 180})
+	if err != nil {
+		t.Fatalf("tela pela rota local: %v", err)
+	}
+	h := &recordingHandler{}
+	runCtx, cancel := context.WithCancel(ctx)
+	defer cancel()
+	go s.Run(runCtx, h)
+	eventually(t, func() bool { f, ok := h.lastFrame(); return ok && f.W == 320 && f.H == 180 }, "o vídeo não veio no tamanho da área (320x180)")
+	s.Viewport(0, 0)
+	eventually(t, func() bool { f, ok := h.lastFrame(); return ok && f.W == 640 && f.H == 360 }, "no tamanho real o vídeo deveria voltar a 640x360")
 }

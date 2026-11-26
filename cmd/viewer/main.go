@@ -2,7 +2,7 @@
 // (remoteit-tecnico.exe): login, lista das máquinas e uma janela por sessão,
 // com decodificação H.264 na GPU e todas as teclas (Win, Alt+Tab) sem
 // precisar de tela cheia. Usa a mesma conta, a mesma API e o mesmo protocolo
-// do console no navegador, que continua existindo (docs/adr/0012-visualizador-nativo.md).
+// do console no navegador, que continua existindo (docs/DECISOES.md, ADR 0012).
 //
 // Configurações em %LOCALAPPDATA%\RemoteIT: viewer.json (relay e usuário) e
 // viewer.token (a sessão, protegida pelo DPAPI do usuário).

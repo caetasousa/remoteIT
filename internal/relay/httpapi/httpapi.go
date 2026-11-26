@@ -91,6 +91,11 @@ type Config struct {
 	// PublicURL é a origem pública do relay (RELAY_PUBLIC_URL), usada no
 	// script de instalação por PowerShell. Vazia: vem da requisição.
 	PublicURL string
+	// LocalURL é como alcançar este relay sem passar pela internet, no PC
+	// (ou na rede) onde ele roda (RELAY_LOCAL_URL, ex.: http://localhost:3000).
+	// O visualizador do técnico confere se chega nele e, chegando, abre a
+	// tela por ali: o vídeo não dá a volta pela Cloudflare. Vazia: desligado.
+	LocalURL string
 	// Static contém o build do frontend, com index.html na raiz.
 	Static fs.FS
 	// Health confere dependências externas (o banco). Nil = sempre saudável.
@@ -105,6 +110,7 @@ type Config struct {
 
 type server struct {
 	Config
+	instance    string // identidade deste processo (veja route.go)
 	upgrader    websocket.Upgrader
 	emailLimit  *rateLimit
 	loginLimit  *failureLimit
@@ -114,7 +120,7 @@ type server struct {
 
 // New monta o handler HTTP do relay.
 func New(cfg Config) http.Handler {
-	s := &server{Config: cfg,
+	s := &server{Config: cfg, instance: newInstance(),
 		emailLimit:  newRateLimit(emailRequestsPerHour, time.Hour),
 		loginLimit:  newFailureLimit(),
 		enrollLimit: newRateLimit(enrollsPerHour, time.Hour),
@@ -148,6 +154,8 @@ func New(cfg Config) http.Handler {
 	mux.HandleFunc("POST /api/agent/enroll", s.enrollAgent)
 	mux.HandleFunc("GET /api/agent/update", s.updateOffer)
 	mux.HandleFunc("GET /api/agent/update/{edition}", s.updateDownload)
+	mux.HandleFunc("GET /api/relay", s.relayInfo)
+	mux.Handle("GET /api/viewer/route", s.auth(http.HandlerFunc(s.viewerRoute)))
 	mux.Handle("GET /api/viewer/update", s.auth(http.HandlerFunc(s.viewerOffer)))
 	mux.Handle("GET /api/viewer/update.exe", s.auth(http.HandlerFunc(s.viewerExe)))
 	mux.Handle("GET /download/viewer.exe", s.auth(s.viewerDownload(false)))

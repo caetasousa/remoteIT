@@ -6,9 +6,12 @@
 // Com uma placa de vídeo compatível, liga o DXVA (decodificação na GPU)
 // passando um dispositivo D3D11; sem ela, o mesmo MFT decodifica na CPU.
 //
-// A saída é NV12 recortado no tamanho visível e contíguo (plano Y, depois UV):
-// a conversão para BGRA fica em yuv.h, porque o AVC444 precisa dos planos
-// crus das duas visões para recompor a cor (veja internal/avc444).
+// Duas saídas:
+//   rd_decode      NV12 recortado no tamanho visível e contíguo, na memória
+//                  (desenho pela CPU: a conversão para BGRA fica em yuv.h).
+//   rd_decode_tex  direto numa textura NV12 do desenho na GPU
+//                  (internal/viewer/render), sem passar pela memória: com
+//                  DXVA no mesmo dispositivo, é uma cópia dentro da GPU.
 #define COBJMACROS
 #define WIN32_LEAN_AND_MEAN
 #include <windows.h>
@@ -74,6 +77,11 @@ typedef struct {
 	uint8_t *nv12;         // último quadro, NV12 recortado e contíguo
 	int nv12_cap;
 	LONGLONG ts;
+	// modo textura (rd_open_dev / rd_decode_tex)
+	ID3D11Device *rdev;       // dispositivo do desenho (não é nosso: AddRef)
+	ID3D11Texture2D *target;  // destino do quadro em andamento
+	ID3D11Texture2D *upload;  // NV12 de escrita pela CPU, quando a saída não vem da GPU
+	int up_w, up_h;
 } rd_ctx;
 
 static void rd_err(char *err, int n, const char *what, HRESULT hr) {
@@ -115,16 +123,21 @@ static HRESULT rd_set_output(rd_ctx *c) {
 
 // rd_try_hw liga o DXVA: dispositivo D3D11 com suporte a vídeo, protegido
 // para várias threads, entregue ao MFT. Qualquer falha deixa o MFT na CPU.
-static void rd_try_hw(rd_ctx *c) {
+static void rd_try_hw(rd_ctx *c, ID3D11Device *shared) {
 	IMFAttributes *a = NULL;
 	UINT32 aware = 0;
 	if (FAILED(IMFTransform_GetAttributes(c->mft, &a)) || !a) return;
 	IMFAttributes_GetUINT32(a, &MF_SA_D3D11_AWARE, &aware);
 	IMFAttributes_Release(a);
 	if (!aware) return;
-	D3D_FEATURE_LEVEL fl[] = {D3D_FEATURE_LEVEL_11_1, D3D_FEATURE_LEVEL_11_0, D3D_FEATURE_LEVEL_10_1};
-	if (FAILED(D3D11CreateDevice(NULL, D3D_DRIVER_TYPE_HARDWARE, NULL, D3D11_CREATE_DEVICE_VIDEO_SUPPORT,
-			fl, 3, D3D11_SDK_VERSION, &c->dev, NULL, NULL))) return;
+	if (shared) { // o dispositivo do desenho: a saída do DXVA já fica onde vai ser desenhada
+		c->dev = shared;
+		ID3D11Device_AddRef(shared);
+	} else {
+		D3D_FEATURE_LEVEL fl[] = {D3D_FEATURE_LEVEL_11_1, D3D_FEATURE_LEVEL_11_0, D3D_FEATURE_LEVEL_10_1};
+		if (FAILED(D3D11CreateDevice(NULL, D3D_DRIVER_TYPE_HARDWARE, NULL, D3D11_CREATE_DEVICE_VIDEO_SUPPORT,
+				fl, 3, D3D11_SDK_VERSION, &c->dev, NULL, NULL))) return;
+	}
 	ID3D10Multithread *mt = NULL;
 	if (SUCCEEDED(ID3D11Device_QueryInterface(c->dev, &IID_ID3D10Multithread, (void **)&mt))) {
 		ID3D10Multithread_SetMultithreadProtected(mt, TRUE);
@@ -153,11 +166,26 @@ void rd_close(rd_ctx *c) {
 	}
 	if (c->mgr) IMFDXGIDeviceManager_Release(c->mgr);
 	if (c->dev) ID3D11Device_Release(c->dev);
+	if (c->upload) ID3D11Texture2D_Release(c->upload);
+	if (c->rdev) ID3D11Device_Release(c->rdev);
 	free(c->nv12);
 	free(c);
 }
 
+static int rd_open_with(rd_ctx **out, int codec, int allow_hw, ID3D11Device *shared, char *err, int errlen);
+
 int rd_open(rd_ctx **out, int codec, int allow_hw, char *err, int errlen) {
+	return rd_open_with(out, codec, allow_hw, NULL, err, errlen);
+}
+
+// rd_open_dev abre o decodificador para o modo textura (rd_decode_tex): o
+// DXVA, quando há, usa o dispositivo do desenho dev; sem ele, a saída da CPU
+// sobe para a textura por esse mesmo dispositivo.
+int rd_open_dev(rd_ctx **out, int codec, ID3D11Device *dev, char *err, int errlen) {
+	return rd_open_with(out, codec, 1, dev, err, errlen);
+}
+
+static int rd_open_with(rd_ctx **out, int codec, int allow_hw, ID3D11Device *shared, char *err, int errlen) {
 	const GUID *sub = codec == RD_AV1 ? &rdFormatAV1 : &MFVideoFormat_H264;
 	*out = NULL;
 	if (rd_load() != 1) {
@@ -184,7 +212,11 @@ int rd_open(rd_ctx **out, int codec, int allow_hw, char *err, int errlen) {
 		IMFAttributes_SetUINT32(a, &MF_LOW_LATENCY, TRUE);
 		IMFAttributes_Release(a);
 	}
-	if (allow_hw) rd_try_hw(c);
+	if (shared) {
+		c->rdev = shared;
+		ID3D11Device_AddRef(shared);
+	}
+	if (allow_hw) rd_try_hw(c, shared);
 
 	IMFMediaType *t = NULL;
 	dMFCreateMediaType(&t);
@@ -212,6 +244,8 @@ static void nv12_crop(const uint8_t *src, LONG pitch, UINT32 plane_h, int w, int
 	for (int y = 0; y < h / 2; y++) memcpy(dst + (size_t)w * y, uv + (size_t)pitch * y, w);
 }
 
+static int rd_copy_tex(rd_ctx *c, IMFMediaBuffer *b, int w, int h);
+
 static int rd_copy_out(rd_ctx *c, IMFSample *s, int w, int h) {
 	IMFMediaBuffer *b = NULL;
 	if (FAILED(IMFSample_GetBufferByIndex(s, 0, &b))) return RD_NONE;
@@ -219,6 +253,11 @@ static int rd_copy_out(rd_ctx *c, IMFSample *s, int w, int h) {
 	if (h <= 0 || h > (int)c->h) h = (int)c->h;
 	w &= ~1;
 	h &= ~1;
+	if (c->target) {
+		int r = rd_copy_tex(c, b, w, h);
+		IMFMediaBuffer_Release(b);
+		return r;
+	}
 	int need = w * h * 3 / 2;
 	if (need > c->nv12_cap) {
 		free(c->nv12);
@@ -246,6 +285,73 @@ static int rd_copy_out(rd_ctx *c, IMFSample *s, int w, int h) {
 	}
 	if (b2) IMF2DBuffer_Release(b2);
 	IMFMediaBuffer_Release(b);
+	return ok;
+}
+
+// rd_copy_tex põe o quadro (w x h) na textura NV12 c->target do desenho.
+// Saída do DXVA no mesmo dispositivo: cópia dentro da GPU. Saída na memória
+// (decodificação pela CPU, ou DXVA noutro dispositivo): sobe por uma textura
+// de escrita e copia de lá.
+static int rd_copy_tex(rd_ctx *c, IMFMediaBuffer *b, int w, int h) {
+	ID3D11DeviceContext *x = NULL;
+	ID3D11Device_GetImmediateContext(c->rdev, &x);
+	D3D11_BOX box = {0, 0, 0, (UINT)w, (UINT)h, 1};
+	int ok = RD_NONE;
+	IMFDXGIBuffer *db = NULL;
+	if (SUCCEEDED(IMFMediaBuffer_QueryInterface(b, &IID_IMFDXGIBuffer, (void **)&db))) {
+		ID3D11Texture2D *src = NULL;
+		UINT sub = 0;
+		if (SUCCEEDED(IMFDXGIBuffer_GetResource(db, &IID_ID3D11Texture2D, (void **)&src)) &&
+		    SUCCEEDED(IMFDXGIBuffer_GetSubresourceIndex(db, &sub))) {
+			ID3D11Device *d = NULL;
+			ID3D11Texture2D_GetDevice(src, &d);
+			if (d == c->rdev) {
+				ID3D11DeviceContext_CopySubresourceRegion(x, (ID3D11Resource *)c->target, 0, 0, 0, 0, (ID3D11Resource *)src, sub, &box);
+				ok = RD_FRAME;
+			}
+			if (d) ID3D11Device_Release(d);
+		}
+		if (src) ID3D11Texture2D_Release(src);
+		IMFDXGIBuffer_Release(db);
+	}
+	if (ok != RD_FRAME) {
+		// pela memória: Lock2D dá o pitch real (num buffer da GPU de outro
+		// dispositivo, o Media Foundation copia ao travar)
+		if (!c->upload || c->up_w != w || c->up_h != h) {
+			if (c->upload) ID3D11Texture2D_Release(c->upload);
+			c->upload = NULL;
+			D3D11_TEXTURE2D_DESC td;
+			memset(&td, 0, sizeof td);
+			td.Width = w; td.Height = h; td.MipLevels = 1; td.ArraySize = 1; td.Format = DXGI_FORMAT_NV12;
+			td.SampleDesc.Count = 1; td.Usage = D3D11_USAGE_STAGING; td.CPUAccessFlags = D3D11_CPU_ACCESS_WRITE;
+			if (FAILED(ID3D11Device_CreateTexture2D(c->rdev, &td, NULL, &c->upload))) { ID3D11DeviceContext_Release(x); return RD_ERR; }
+			c->up_w = w; c->up_h = h;
+		}
+		IMF2DBuffer *b2 = NULL;
+		BYTE *p = NULL;
+		LONG pitch = 0;
+		int locked2d = SUCCEEDED(IMFMediaBuffer_QueryInterface(b, &IID_IMF2DBuffer, (void **)&b2)) &&
+		               SUCCEEDED(IMF2DBuffer_Lock2D(b2, &p, &pitch));
+		DWORD len = 0;
+		if (!locked2d) {
+			pitch = c->stride > 0 ? c->stride : (LONG)c->w;
+			if (FAILED(IMFMediaBuffer_Lock(b, &p, NULL, &len)) || len < (DWORD)(pitch * c->h * 3 / 2)) p = NULL;
+		}
+		D3D11_MAPPED_SUBRESOURCE m;
+		if (p && pitch >= w && SUCCEEDED(ID3D11DeviceContext_Map(x, (ID3D11Resource *)c->upload, 0, D3D11_MAP_WRITE, 0, &m))) {
+			uint8_t *dy = m.pData, *duv = (uint8_t *)m.pData + (size_t)m.RowPitch * h;
+			const uint8_t *suv = p + (size_t)pitch * c->h;
+			for (int y = 0; y < h; y++) memcpy(dy + (size_t)y * m.RowPitch, p + (size_t)y * pitch, w);
+			for (int y = 0; y < h / 2; y++) memcpy(duv + (size_t)y * m.RowPitch, suv + (size_t)y * pitch, w);
+			ID3D11DeviceContext_Unmap(x, (ID3D11Resource *)c->upload, 0);
+			ID3D11DeviceContext_CopySubresourceRegion(x, (ID3D11Resource *)c->target, 0, 0, 0, 0, (ID3D11Resource *)c->upload, 0, &box);
+			ok = RD_FRAME;
+		}
+		if (locked2d) IMF2DBuffer_Unlock2D(b2);
+		else if (p) IMFMediaBuffer_Unlock(b);
+		if (b2) IMF2DBuffer_Release(b2);
+	}
+	ID3D11DeviceContext_Release(x);
 	return ok;
 }
 
@@ -312,9 +418,20 @@ int rd_decode(rd_ctx *c, const uint8_t *data, int n, int w, int h, uint8_t **out
 	if (r == RD_ERR) return RD_ERR;
 	if (r == RD_FRAME) got = RD_FRAME;
 	if (got == RD_FRAME) {
-		*out = c->nv12;
+		if (out) *out = c->nv12;
 		*ow = ((w > 0 && w <= (int)c->w) ? w : (int)c->w) & ~1;
 		*oh = ((h > 0 && h <= (int)c->h) ? h : (int)c->h) & ~1;
 	}
 	return got;
+}
+
+// rd_decode_tex é o rd_decode do modo textura: o quadro decodificado vai
+// direto para target (NV12, pelo menos w x h, no dispositivo de
+// rd_open_dev). *ow e *oh recebem o tamanho copiado.
+int rd_decode_tex(rd_ctx *c, const uint8_t *data, int n, int w, int h, ID3D11Texture2D *target, int *ow, int *oh) {
+	if (!c->rdev || !target) return RD_ERR;
+	c->target = target;
+	int r = rd_decode(c, data, n, w, h, NULL, ow, oh);
+	c->target = NULL;
+	return r;
 }

@@ -53,7 +53,7 @@ func (stillSource) Close()         {}
 func TestStreamRecoversWhenDesktopCanBeFollowedAgain(t *testing.T) {
 	var follows atomic.Int32
 	enc := Encoders{
-		JPEG: func(int, int) (Source, error) {
+		JPEG: func(Params) (Source, error) {
 			if follows.Load() <= 2 {
 				return nil, ErrReopen
 			}
@@ -167,8 +167,8 @@ func runScreen(t *testing.T, preset string, changing bool, d time.Duration) (*ac
 	ch.Store(changing)
 	var captures atomic.Int32
 	enc := Encoders{
-		H264:  func(int, int, int) (Source, error) { return &screenSource{changing: &ch}, nil },
-		JPEG:  func(int, int) (Source, error) { return nil, errors.New("sem JPEG no teste") },
+		H264:  func(Params) (Source, error) { return &screenSource{changing: &ch}, nil },
+		JPEG:  func(Params) (Source, error) { return nil, errors.New("sem JPEG no teste") },
 		Still: func() (Still, error) { return fakeStill{&captures}, nil },
 	}
 	send := &ackSender{}
@@ -202,7 +202,8 @@ func TestNoStillRefreshWhileScreenChanges(t *testing.T) {
 	}
 }
 
-// Preset com resolução reduzida: o refresh nativo não teria o tamanho do
+// Preset com resolução reduzida e fonte sem leitura própria (StillReader):
+// o capturador legado só enxerga a tela nativa, que não teria o tamanho do
 // vídeo, então nem chega a capturar.
 func TestNoStillRefreshOnScaledPreset(t *testing.T) {
 	send, captures := runScreen(t, "balanced", false, StillDelay+500*time.Millisecond)

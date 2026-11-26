@@ -29,7 +29,13 @@ async function viewAgent(page: Page) {
       () =>
         page.getByTestId('screen').evaluate((c: HTMLCanvasElement) => {
           if (c.width !== 640) return false;
-          const d = c.getContext('2d')!.getImageData(0, 0, c.width, c.height).data;
+          // cópia 2D: o canvas pode ser WebGL (render.ts), que não tem getImageData
+          const t = document.createElement('canvas');
+          t.width = c.width;
+          t.height = c.height;
+          const x = t.getContext('2d')!;
+          x.drawImage(c, 0, 0);
+          const d = x.getImageData(0, 0, c.width, c.height).data;
           for (let i = 0; i < d.length; i += 4 * 101) if (d[i] + d[i + 1] + d[i + 2] > 60) return true;
           return false;
         }),

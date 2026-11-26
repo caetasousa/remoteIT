@@ -1,5 +1,5 @@
 // Command signupdate cuida da chave de atualização do agente e assina o
-// manifesto que o relay serve aos agentes (docs/adr/0011-atualizacao-automatica.md).
+// manifesto que o relay serve aos agentes (docs/DECISOES.md, ADR 0011).
 //
 // Uso (o build.sh chama sozinho):
 //

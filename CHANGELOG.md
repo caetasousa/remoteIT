@@ -9,6 +9,26 @@ O formato segue o [Keep a Changelog](https://keepachangelog.com/pt-BR/1.1.0/) e 
 
 ### Added
 
+- **Rota local** ([ADR 0014](docs/DECISOES.md#adr-0014)): com `RELAY_LOCAL_URL` (ex.:
+  `http://localhost:3000`), o visualizador do técnico abre a tela direto pelo endereço do PC do
+  relay, depois de conferir em `/api/relay` (sem cookie) que é o mesmo processo. Com o relay em casa
+  atrás do túnel, isso tira ~90 ms medidos de cada ida e volta. Rotas `GET /api/relay` (pública) e
+  `GET /api/viewer/route` (logada).
+- **Vídeo do tamanho da janela**: o `cfg` leva a área de exibição (`vw`, `vh`, em pixels físicos);
+  o agente reduz a tela na GPU pela média da área (`internal/scale`, o filtro certo para texto) e só
+  reabre o encoder se o tamanho de saída mudar. No "Tamanho real", resolução nativa.
+- **Áreas sem perda por blocos**: o encoder expõe os blocos de 64 px que o DXGI diz que mudaram.
+  Cada bloco parado há 300 ms ganha um retalho PNG exato (codec 6), e a mensagem `rg` diz, antes de
+  cada quadro, onde o vídeo vale; fora dela o técnico mantém os pixels exatos.
+- **Desenho na GPU no visualizador** (`internal/viewer/render`, Direct3D 11): a saída do DXVA fica
+  na GPU, shaders convertem a cor e recompõem o 4:4:4, composição por região e ajuste à janela
+  (média da área ao reduzir). Sem Direct3D 11 que leia NV12 em shader, GDI como antes.
+- **Cor 4:4:4 no console**: com WebGL2 e H.264 em software, as duas visões do AVC444 são
+  decodificadas e a cor recomposta em shader (botão **4:4:4**). Se o PC do técnico não der conta,
+  o 4:4:4 sai sozinho.
+- **Telemetria por etapa**: o `stats` traz o RTT mínimo (dá a fila) e o tempo de captura +
+  codificação; o visualizador e o console mostram Fila, Codif., Decod. e Rota.
+
 - **Instalar sem navegador** (`irm https://…/i/<código>/ps | iex`): o console mostra o comando junto
   com o link de instalação. O script baixa o `.exe` do link, confere o SHA-256 calculado pelo relay e
   instala (serviço com um UAC, ou portátil em `%LOCALAPPDATA%\RemoteIT`), com o resultado no
@@ -19,7 +39,7 @@ O formato segue o [Keep a Changelog](https://keepachangelog.com/pt-BR/1.1.0/) e 
   desenhados, banda e RTT colorido) com o motivo de o 4:4:4 não estar em uso, avisos num cartão
   central e **Ajuda ▸ Diagnóstico de vídeo**. Erros de login em frases claras. Regras em
   `internal/viewer/ui`, testadas no Linux.
-- **Negociação de codecs** ([ADR 0013](docs/adr/0013-codecs-e-negociacao.md)): o `hello` leva
+- **Negociação de codecs** ([ADR 0013](docs/DECISOES.md#adr-0013)): o `hello` leva
   `codecs`, a lista do que o técnico decodifica em ordem de preferência; o agente abre o primeiro que
   conseguir e cai sozinho para o próximo se um encoder não abrir ou quebrar. O técnico também desiste
   de um codec depois de três falhas seguidas do decodificador. O campo `h264` continua para agentes
@@ -30,17 +50,17 @@ O formato segue o [Keep a Changelog](https://keepachangelog.com/pt-BR/1.1.0/) e 
   Referência do arranjo em `internal/avc444`.
 - **AV1 opcional** (codec 5): encoder AV1 de GPU do Media Foundation no agente; no navegador, só
   quando o `VideoDecoder` decodifica AV1 na GPU; no visualizador, com a Extensão de Vídeo AV1.
-- **Cada técnico com as suas máquinas** ([ADR 0010](docs/adr/0010-maquinas-por-tecnico.md)): o `.exe`
+- **Cada técnico com as suas máquinas** ([ADR 0010](docs/DECISOES.md#adr-0010)): o `.exe`
   baixado sai marcado com um código do técnico; na primeira execução a máquina troca o código por
   uma credencial própria (ID aleatório, DPAPI) e fica no nome dele. Só o dono e os admins veem e
   acessam; **Remover** revoga a credencial. Não há compartilhamento entre técnicos.
 - **Link de instalação** (`/i/<código>`): o cliente baixa o agente sem conta; validade de 1 hora a
   7 dias ou **sem prazo**, de 1 a 100 máquinas ou **sem limite**, revogável.
-- **Visualizador do técnico para Windows** (`remoteit-tecnico.exe`, [ADR 0012](docs/adr/0012-visualizador-nativo.md),
-  [guia](docs/VISUALIZADOR.md)): login com a mesma conta, lista de máquinas, uma janela por sessão,
+- **Visualizador do técnico para Windows** (`remoteit-tecnico.exe`, [ADR 0012](docs/DECISOES.md#adr-0012),
+  [guia](docs/WINDOWS.md#visualizador)): login com a mesma conta, lista de máquinas, uma janela por sessão,
   H.264 pelo Media Foundation (GPU quando possível), todas as teclas sem tela cheia, área de
   transferência para o PC remoto (mensagem `clip`), atualização automática. O console continua.
-- **Atualização automática do agente** ([ADR 0011](docs/adr/0011-atualizacao-automatica.md)): versão
+- **Atualização automática do agente** ([ADR 0011](docs/DECISOES.md#adr-0011)): versão
   em cada `.exe`, `dist/update.json` assinado com uma chave Ed25519 do projeto (`cmd/signupdate`), e o
   agente se troca sozinho, fora de atendimento, quando o relay anuncia outra versão. Coluna **Versão**
   no console.
@@ -61,16 +81,35 @@ O formato segue o [Keep a Changelog](https://keepachangelog.com/pt-BR/1.1.0/) e 
 - Testes de integração (relay, agente e Postgres reais) e E2E (Playwright).
 - Duas edições do agente: `suporte-ti.exe` (só executa, sem admin) e `suporte-ti-servico.exe`
   (dois cliques instalam ou atualizam o serviço pelo UAC), com dois botões de download no console
-  e a rota `/download/agent-servico.exe` ([ADR 0008](docs/adr/0008-duas-edicoes-do-agente.md)).
+  e a rota `/download/agent-servico.exe` ([ADR 0008](docs/DECISOES.md#adr-0008)).
 - Botão 🔒 **Bloquear tela** no Viewer (mensagem `lock` → `LockWorkStation`), só depois do consentimento.
 - Modo serviço: tela de bloqueio e de login visíveis e controláveis, inclusive para logar com outra
-  conta do Windows ([ADR 0007](docs/adr/0007-modo-servico-system.md)).
+  conta do Windows ([ADR 0007](docs/DECISOES.md#adr-0007)).
 - Logs do serviço e do worker em `%ProgramData%\RemoteIT\service.log` e `agent.log`.
 - Documentação no padrão do repositório: [docs/FLUXOS.md](docs/FLUXOS.md) com diagramas de todos
-  os fluxos, [docs/AGENTE-WINDOWS.md](docs/AGENTE-WINDOWS.md), [docs/SEGURANCA.md](docs/SEGURANCA.md).
+  os fluxos, [docs/WINDOWS.md](docs/WINDOWS.md#agente), [docs/SEGURANCA.md](docs/SEGURANCA.md).
 
 ### Changed
 
+- **Controle de fluxo e bitrate pela fila**: um quadro pode esperar o RTT mínimo + 50 ms (era 3×,
+  ~420 ms com o relay atrás do túnel); o bitrate cai com fila acima de 80 ms e só sobe quando o alvo
+  foi usado; pisos de 1 a 5 Mbps (o padrão não descia de 15) e início moderado; o RTT mínimo é o
+  menor da janela de 10 s.
+- **Encoder**: sem keyframe periódico (era 1 por segundo, ~300× um quadro comum numa tela de
+  escritório); buffer do controle de taxa de 4 quadros (era 1 s inteiro: a unidade é bytes);
+  qualidade × velocidade começa na qualidade e baixa sozinha se o encoder não der conta (o
+  comentário dizia o contrário do que o valor fazia).
+- Mexer só o mouse não gera mais quadro de vídeo (a posição do cursor vai à parte): sobra banda e
+  vaga no controle de fluxo, e o refresh sem perda não é mais adiado pelo mouse.
+- O console WebGL2 (ou 2D) aplica vídeo e retalhos numa fila em ordem, e passa o espaço de cor
+  BT.709 explícito ao decodificador.
+- A fonte JPEG reduz pela média da área (era vizinho mais próximo).
+- **Documentação reorganizada** de 28 para 10 arquivos `.md`, sem perder conteúdo: os 13 ADRs viraram
+  [docs/DECISOES.md](docs/DECISOES.md) (com índice, ligações entre as decisões e as revisões
+  incorporadas ao texto); protocolo e API entraram em [docs/ARQUITETURA.md](docs/ARQUITETURA.md);
+  agente e visualizador no Windows, em [docs/WINDOWS.md](docs/WINDOWS.md); testes e design do
+  console, no [CONTRIBUTING.md](CONTRIBUTING.md); o levantamento de melhorias virou
+  [docs/ROADMAP.md](docs/ROADMAP.md), separando o que foi feito do que falta.
 - Downloads pelo navegador vêm em **`.zip`** (o `.exe` e um `LEIA-ME.txt`): os botões do console
   (`/download/agent.zip`, `agent-servico.zip`, `viewer.zip`) e o link de instalação `/i/<código>`.
   O `.exe` solto continua em `/download/*.exe` e `/i/<código>/exe` (curl, atualização automática e o
@@ -82,7 +121,7 @@ O formato segue o [Keep a Changelog](https://keepachangelog.com/pt-BR/1.1.0/) e 
   AVC444 e AV1); o decodificador do visualizador (`rcdec.h`) entrega NV12 e a conversão de cor foi
   para `internal/viewer/decode/yuv.h`, testada no Linux.
 - Console redesenhado: tema escuro estilo terminal (ciano, monoespaçada) e layout para celular
-  ([docs/DESIGN.md](docs/DESIGN.md)). A tela de acesso remoto ganhou barra com telemetria legível
+  ([CONTRIBUTING.md](CONTRIBUTING.md#design)). A tela de acesso remoto ganhou barra com telemetria legível
   (codec, resolução, fps, banda, RTT).
 - **Incompatível:** o relay exige `DATABASE_URL`. O login do console deixa de ser HTTP Basic
   (qualquer usuário + `RELAY_ADMIN_PASS`) e passa a ser usuário e senha; `RELAY_ADMIN_PASS` agora é

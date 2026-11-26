@@ -1,6 +1,6 @@
 // Package update mantém o agente (e o visualizador do técnico) na versão que
 // o relay anuncia
-// (docs/adr/0011-atualizacao-automatica.md).
+// (docs/DECISOES.md, ADR 0011).
 //
 // Ao conectar e a cada hora, o agente pergunta ao relay qual é a versão da
 // sua edição. Se for diferente da dele, confere a assinatura da oferta com a

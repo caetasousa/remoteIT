@@ -15,7 +15,7 @@ import (
 // arredonda em float32, então aceita 1 nível de diferença.
 //
 // Roda no Windows (GPU ou WARP) e no Wine; o caminho NV12 direto, que só
-// existe com encoder de hardware, fica no checklist manual (docs/TESTES.md).
+// existe com encoder de hardware, fica no checklist manual (CONTRIBUTING.md, seção Testes).
 func TestAVC444ShadersMatchReference(t *testing.T) {
 	const w, h = 64, 48
 	img := image.NewRGBA(image.Rect(0, 0, w, h))

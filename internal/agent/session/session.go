@@ -27,6 +27,7 @@ type Stream interface {
 	Run(ctx context.Context)
 	OnHello(codecs []string)
 	SetPreset(name string)
+	SetViewport(w, h int)
 	RequestKeyframe()
 	OnAck(seq uint32)
 }
@@ -90,6 +91,7 @@ func (c *Controller) Handle(m protocol.Message) {
 		t.stream.RequestKeyframe()
 	case protocol.TypeConfig:
 		t.stream.SetPreset(m.P)
+		t.stream.SetViewport(m.VW, m.VH)
 	case protocol.TypeLock:
 		// mesma exigência do input: só com consentimento já concedido
 		if t.granted.Load() && c.cfg.Lock != nil {

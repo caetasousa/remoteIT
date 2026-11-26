@@ -138,6 +138,7 @@ func run(opt server.Options, agentExe, agentSvcExe string, logger *slog.Logger) 
 		AgentExe:        agentExe,
 		AgentServiceExe: agentSvcExe,
 		PublicURL:       strings.TrimRight(os.Getenv("RELAY_PUBLIC_URL"), "/"),
+		LocalURL:        strings.TrimRight(os.Getenv("RELAY_LOCAL_URL"), "/"),
 		UpdateManifest:  updateManifest(agentExe),
 		ViewerExe:       sibling(agentExe, "remoteit-tecnico.exe"),
 		Static:          web.FS(),

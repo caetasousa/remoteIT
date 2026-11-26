@@ -49,10 +49,10 @@ func fakeEncoders(opened *[]string, fail, broken map[string]bool) Encoders {
 		return s, nil
 	}
 	return Encoders{
-		AVC444: func(int, int) (Source, error) { return mk("avc444", protocol.CodecAVC444) },
-		AV1:    func(int, int, int) (Source, error) { return mk("av1", protocol.CodecAV1) },
-		H264:   func(int, int, int) (Source, error) { return mk("h264", protocol.CodecH264) },
-		JPEG:   func(int, int) (Source, error) { return mk("jpeg", protocol.CodecJPEG) },
+		AVC444: func(Params) (Source, error) { return mk("avc444", protocol.CodecAVC444) },
+		AV1:    func(Params) (Source, error) { return mk("av1", protocol.CodecAV1) },
+		H264:   func(Params) (Source, error) { return mk("h264", protocol.CodecH264) },
+		JPEG:   func(Params) (Source, error) { return mk("jpeg", protocol.CodecJPEG) },
 	}
 }
 

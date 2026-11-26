@@ -106,7 +106,8 @@ func main() {
 		H264: gpu.NewH264, AVC444: gpu.NewAVC444, AV1: gpu.NewAV1, JPEG: jpeg.New,
 		CursorShape:   capture.CursorShape,
 		FollowDesktop: desktop.FollowInput,
-		// refresh de nitidez: captura GDI sem perda quando a tela para
+		// refresh sem perda das fontes que não leem a própria imagem (JPEG):
+		// captura GDI, só na resolução nativa
 		Still: func() (media.Still, error) { return capture.New() },
 	}
 	injector := input.New(desktop.FollowInput)

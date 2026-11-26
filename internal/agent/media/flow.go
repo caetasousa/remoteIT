@@ -22,6 +22,13 @@ const (
 // e destravar o envio.
 const lostAckAfter = 3 * time.Second
 
+// QueueBudget é quanto um quadro pode esperar em fila, além do RTT mínimo,
+// antes de o envio parar. É um valor fixo de propósito: um limite
+// proporcional ao RTT (o antigo 3x) deixava a fila chegar a ~420 ms com o
+// relay atrás de um túnel (RTT de 140 ms), e cada um desses ms é atraso na
+// tela do técnico.
+const QueueBudget = 50 * time.Millisecond
+
 // FlowControl implementa o controle de fluxo fim a fim: o navegador confirma
 // (ack) cada quadro, e o agente não codifica um novo enquanto houver quadros
 // demais em trânsito. Isso evita fila nos buffers TCP, a principal causa de
@@ -36,6 +43,9 @@ type FlowControl struct {
 	minRTT   atomic.Int64
 	interval atomic.Int64 // intervalo entre quadros do preset (veja SetInterval)
 	sentAt   [256]atomic.Int64
+	rttSum   atomic.Int64 // soma e contagem dos RTT desde o último TakeRTT
+	rttN     atomic.Int64
+	winMin   atomic.Int64 // menor RTT desde o último ResetMinRTT
 }
 
 // Sent registra o envio de um novo quadro em at e devolve seu número de
@@ -61,8 +71,13 @@ func (f *FlowControl) OnAck(seq uint32, now time.Time) {
 	if t := f.sentAt[seq%256].Load(); t != 0 {
 		r := now.UnixNano() - t
 		f.rtt.Store(r)
+		f.rttSum.Add(r)
+		f.rttN.Add(1)
 		if m := f.minRTT.Load(); m == 0 || r < m {
 			f.minRTT.Store(r)
+		}
+		if m := f.winMin.Load(); m == 0 || r < m {
+			f.winMin.Store(r)
 		}
 	}
 }
@@ -72,9 +87,10 @@ func (f *FlowControl) OnAck(seq uint32, now time.Time) {
 // keyframe).
 func (f *FlowControl) DropInflight() { f.acked.Store(f.seq.Load()) }
 
-// Congested informa se o próximo quadro deve esperar: há [MaxInflight]
-// quadros em trânsito ou o mais antigo está demorando mais que 3x o menor RTT
-// visto (mínimo 50 ms). Um quadro sem ACK há mais de 3 s é dado como perdido.
+// Congested informa se o próximo quadro deve esperar: a janela (veja
+// [FlowControl.Window]) está cheia ou o quadro mais antigo está esperando há
+// mais que o menor RTT visto mais [QueueBudget] (mínimo 50 ms). Um quadro
+// sem ACK há mais de 3 s é dado como perdido.
 func (f *FlowControl) Congested(now time.Time) bool {
 	sent, acked := f.seq.Load(), f.acked.Load()
 	inflight := sent - acked
@@ -82,7 +98,7 @@ func (f *FlowControl) Congested(now time.Time) bool {
 		return false
 	}
 	oldest := time.Duration(now.UnixNano() - f.sentAt[(acked+1)%256].Load())
-	limit := max(50*time.Millisecond, 3*time.Duration(f.minRTT.Load()))
+	limit := max(50*time.Millisecond, time.Duration(f.minRTT.Load())+QueueBudget)
 	switch {
 	case oldest > lostAckAfter:
 		f.acked.Store(sent)
@@ -112,5 +128,25 @@ func (f *FlowControl) Window() uint32 {
 // RTT devolve o tempo de ida e volta do último quadro confirmado.
 func (f *FlowControl) RTT() time.Duration { return time.Duration(f.rtt.Load()) }
 
-// ResetMinRTT esquece o menor RTT visto, para acompanhar mudanças de rede.
-func (f *FlowControl) ResetMinRTT() { f.minRTT.Store(f.rtt.Load()) }
+// MinRTT devolve o menor RTT recente (a rede sem fila).
+func (f *FlowControl) MinRTT() time.Duration { return time.Duration(f.minRTT.Load()) }
+
+// TakeRTT devolve o RTT médio dos quadros confirmados desde a última chamada
+// (0 se nenhum foi confirmado) e recomeça a média.
+func (f *FlowControl) TakeRTT() time.Duration {
+	n := f.rttN.Swap(0)
+	s := f.rttSum.Swap(0)
+	if n == 0 {
+		return 0
+	}
+	return time.Duration(s / n)
+}
+
+// ResetMinRTT passa a usar o menor RTT do período desde a última chamada,
+// para acompanhar mudanças de rede (um caminho novo mais lento) sem adotar
+// uma amostra inflada pela própria fila.
+func (f *FlowControl) ResetMinRTT() {
+	if m := f.winMin.Swap(0); m > 0 {
+		f.minRTT.Store(m)
+	}
+}

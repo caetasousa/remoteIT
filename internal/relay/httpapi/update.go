@@ -9,7 +9,7 @@ import (
 	"remoteit/internal/relay/machines"
 )
 
-// Atualização automática (docs/adr/0011-atualizacao-automatica.md). O relay
+// Atualização automática (docs/DECISOES.md, ADR 0011). O relay
 // só repassa o que o build.sh publicou: a versão, o hash e a assinatura do
 // update.json, e o .exe correspondente. Quem confere é o agente, com a chave
 // pública embutida nele; o relay não tem a chave privada.

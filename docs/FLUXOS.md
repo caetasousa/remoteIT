@@ -187,65 +187,70 @@ stateDiagram-v2
 <a id="video"></a>
 ## 4️⃣ Pipeline de vídeo: da GPU do PC à GPU do técnico
 
-> 🗣️ **Em palavras simples:** a tela é copiada direto da placa de vídeo, reduzida e comprimida ali mesmo em H.264 (o mesmo formato de um vídeo do YouTube), sem passar pelo processador. O navegador do técnico recebe e descomprime também na placa de vídeo dele. Placas novas podem usar AV1, que gasta menos internet; o visualizador do técnico pode pedir a cor completa (4:4:4). Sem placa de vídeo, o plano B é tirar "fotos" JPEG da tela.
+> 🗣️ **Em palavras simples:** a tela é copiada direto da placa de vídeo, reduzida para o tamanho da janela do técnico e comprimida ali mesmo em H.264 (o mesmo formato de um vídeo do YouTube), sem passar pelo processador. O técnico descomprime também na placa de vídeo dele. Só as partes da tela que **mudaram** recebem vídeo; as que pararam ganham, logo depois, uma cópia **exata** (PNG), que fica até mudarem de novo. Placas novas podem usar AV1, que gasta menos internet; o visualizador do técnico e o console podem pedir a cor completa (4:4:4). Sem placa de vídeo, o plano B é tirar "fotos" JPEG da tela.
 
 ```mermaid
 graph LR
     subgraph PC["🖥️ PC atendido"]
-        D["🎞️ DXGI Desktop<br/>Duplication"] --> S["📐 D3D11<br/>escala + NV12"]
-        D --> SH["🎨 shaders D3D11<br/>2 visões NV12"]
-        S --> E["⚡ Media Foundation<br/>H.264 ou AV1 (NVENC/QSV/AMF)"]
-        SH --> E2["⚡⚡ 2× H.264<br/>AVC444"]
-        E2 --> F
+        D["🎞️ DXGI Desktop<br/>Duplication"] --> R["📐 shader: redução<br/>pela média da área"]
+        D --> M["🧩 blocos que mudaram<br/>(retângulos do DXGI)"]
+        R --> S["🎨 NV12 (Video Processor)<br/>ou 2 visões (AVC444)"]
+        S --> E["⚡ Media Foundation<br/>H.264, AV1 ou 2× H.264"]
+        R --> ST["🔍 leitura sem perda<br/>dos blocos parados → PNG"]
         G["🖼️ GDI BitBlt"] -.sem GPU.-> J["🗜️ JPEG"]
-        E --> F["📦 cabeçalho 12 bytes<br/>codec, keyframe, w, h, seq"]
+        E --> F["📦 cabeçalho 12 bytes<br/>+ rg: onde o quadro vale"]
+        ST --> F
         J --> F
     end
     F -- "WebSocket binário<br/>via relay" --> P
-    subgraph NAV["🧑‍💻 Navegador"]
-        P["🔍 parseFrame"] --> V["🎬 WebCodecs<br/>VideoDecoder"]
-        P -.JPEG.-> I["🖼️ createImageBitmap"]
-        V --> C["🖵 canvas"]
+    subgraph TEC["🧑‍💻 Técnico"]
+        P["🔍 parseFrame + ack"] --> V["🎬 decodificador<br/>(GPU; 4:4:4 em software)"]
+        P -.PNG.-> I["🖼️ retalho sem perda"]
+        V --> C["🖵 tela composta:<br/>vídeo só nas regiões que mudaram"]
         I --> C
-        C --> K["✅ ack s=seq"]
     end
 ```
 
 | Etapa | Código | Observação |
 |---|---|---|
-| Captura + encoder | [`internal/agent/media/gpu`](../internal/agent/media/gpu) (C em `rcenc.h`) | H.264, AVC444 e AV1; compilado com Zig; sem Zig, o build sai só com JPEG |
-| Arranjo do 4:4:4 | [`internal/avc444`](../internal/avc444/avc444.go) | a referência que o shader do agente e o visualizador seguem |
-| Fallback | [`media/capture`](../internal/agent/media/capture), [`media/jpeg`](../internal/agent/media/jpeg) | GDI + `image/jpeg`; qualidade 25–85 conforme o bitrate |
-| Laço de transmissão | [`media/stream.go`](../internal/agent/media/stream.go) | abre a fonte, mede, envia stats 1x/s |
-| Formato do quadro | [`internal/protocol`](../internal/protocol) + [`frontend/src/lib/protocol.ts`](../frontend/src/lib/protocol.ts) | veja [PROTOCOLO.md](PROTOCOLO.md) |
-| Decodificação | [`frontend/src/lib/viewer/session.ts`](../frontend/src/lib/viewer/session.ts) | o caminho dos quadros fica fora do Svelte ([ADR 0003](adr/0003-svelte-no-console.md)) |
+| Captura + redução + encoder | [`internal/agent/media/gpu`](../internal/agent/media/gpu) (C em `rcenc.h`) | H.264, AVC444 e AV1; a redução é um shader com o filtro de [`internal/scale`](../internal/scale) (testado contra ele no Wine); compilado com Zig; sem Zig, o build sai só com JPEG |
+| Blocos que mudaram e sem perda | [`media/tiles.go`](../internal/agent/media/tiles.go), [`media/still.go`](../internal/agent/media/still.go) | grade de 64 px: o que o técnico mostra com perda (vídeo) e sem perda (PNG) |
+| Arranjo do 4:4:4 | [`internal/avc444`](../internal/avc444/avc444.go) | a referência que o shader do agente, o visualizador e o console seguem |
+| Fallback | [`media/capture`](../internal/agent/media/capture), [`media/jpeg`](../internal/agent/media/jpeg) | GDI + `image/jpeg`; qualidade 25–85 conforme o bitrate; redução pela média da área |
+| Laço de transmissão | [`media/stream.go`](../internal/agent/media/stream.go) | abre a fonte, mede, manda região e retalhos, stats 1x/s |
+| Formato do quadro | [`internal/protocol`](../internal/protocol) + [`frontend/src/lib/protocol.ts`](../frontend/src/lib/protocol.ts) | veja [ARQUITETURA.md](ARQUITETURA.md#protocolo) |
+| Desenho no console | [`session.ts`](../frontend/src/lib/viewer/session.ts), [`render.ts`](../frontend/src/lib/viewer/render.ts) | fila de desenho em ordem; WebGL2 (ou 2D); fora do Svelte ([ADR 0003](DECISOES.md#adr-0003)) |
+| Desenho no visualizador | [`internal/viewer/render`](../internal/viewer/render) (C em `rcrend.h`) | Direct3D 11; sem ele, GDI ([fluxo 15](#visualizador)) |
 
 <a id="codecs"></a>
 ### 🎞️ Codecs e negociação
 
 | Codec | Quem decodifica | Quando o agente usa |
 |---|---|---|
-| **H.264 4:4:4 (AVC444)** | só o visualizador nativo, com **Qualidade → Cor 4:4:4** | encoder H.264 de GPU e preset de resolução nativa |
+| **H.264 4:4:4 (AVC444)** | o visualizador nativo (Media Foundation) e o console (duas visões em software, cor recomposta em WebGL), com **Cor 4:4:4** ligada | encoder H.264 de GPU e preset sem redução própria (Nítido, Máximo) |
 | **AV1** | navegador ou visualizador que decodifica AV1 na GPU | encoder AV1 de GPU (RTX 40+, Arc / Core Ultra, RX 7000+) |
 | **H.264** | qualquer navegador; o visualizador | sempre que há encoder (GPU ou software) |
 | **JPEG** | todos | sem encoder de vídeo, ou se os outros falharam |
 
-* 📋 **Quem decide é a lista do técnico:** o `hello` leva os codecs em ordem de preferência (navegador: AV1, H.264, JPEG; visualizador nativo: 4:4:4, AV1, H.264, JPEG). O agente abre o primeiro que conseguir e pula o que não serve para o preset (4:4:4 com resolução reduzida). Código: [`media/stream.go`](../internal/agent/media/stream.go) (`openCodec`).
-* 🩹 **Falhou, troca sozinho:** um encoder que não abre, ou que quebra no meio, fica marcado e o próximo entra. Do lado do técnico, três falhas seguidas do decodificador (ou AV1 que engole 120 quadros sem mostrar nada) tiram o codec do `hello`, e o agente troca.
-* 🎨 **Como o 4:4:4 cabe no H.264 comum:** o agente manda duas imagens 4:2:0. A principal é um H.264 normal; a auxiliar carrega a cor que a principal descarta. O visualizador junta as duas e recupera a cor de cada pixel. Detalhes e medições: [ADR 0013](adr/0013-codecs-e-negociacao.md).
+* 📋 **Quem decide é a lista do técnico:** o `hello` leva os codecs em ordem de preferência (4:4:4, AV1, H.264, JPEG; o console só oferece 4:4:4 com WebGL2 e decodificação H.264 em software). O agente abre o primeiro que conseguir e pula o que não serve para o preset (4:4:4 nos presets que reduzem por conta própria). Código: [`media/stream.go`](../internal/agent/media/stream.go) (`openCodec`).
+* 🩹 **Falhou, troca sozinho:** um encoder que não abre, ou que quebra no meio, fica marcado e o próximo entra. Do lado do técnico, três falhas seguidas do decodificador (ou AV1 que engole 120 quadros sem mostrar nada, ou o 4:4:4 em software que não dá conta e acumula fila) tiram o codec do `hello`, e o agente troca.
+* 🎨 **Como o 4:4:4 cabe no H.264 comum:** o agente manda duas imagens 4:2:0. A principal é um H.264 normal; a auxiliar carrega a cor que a principal descarta. O técnico junta as duas e recupera a cor de cada pixel. Detalhes e medições: [ADR 0013](DECISOES.md#adr-0013).
+* 🗝️ **Keyframe só quando precisa:** no começo, ao trocar de codec ou de tamanho, e quando o técnico pede (`kf`). Sobre TCP nada se perde, e um keyframe numa tela de escritório custa ~300× um quadro comum ([ADR 0014](DECISOES.md#adr-0014)).
 
 ### 🎚️ Presets de qualidade
 
-| Preset (`cfg.p`) | No console | Largura máx. | FPS | Bitrate |
+| Preset (`cfg.p`) | No console | Largura máx. | FPS | Bitrate (mín. · início · máx.) |
 |---|---|---|:---:|---|
-| `turbo` | Ultra-rápido | 1280 px | 60 | 4–10 Mbps |
-| `balanced` | Equilibrado | 1920 px | 60 | 8–20 Mbps |
-| `quality` (padrão) | Nítido | nativa | 60 | 15–40 Mbps |
-| `quality60` | Máximo | nativa | 60 | 25–80 Mbps |
+| `turbo` | Ultra-rápido | 1280 px | 60 | 1 · 4 · 10 Mbps |
+| `balanced` | Equilibrado | 1920 px | 60 | 2 · 8 · 20 Mbps |
+| `quality` (padrão) | Nítido | a da janela | 60 | 3 · 12 · 40 Mbps |
+| `quality60` | Máximo | a da janela | 60 | 5 · 25 · 80 Mbps |
 
-* 🖱️ **Cursor por cima do vídeo:** o agente manda a posição (`cur`) e o formato (`cs`) do cursor separados, e o console desenha o cursor local. Ele se move na hora, mesmo que o quadro ainda esteja a caminho.
-* 🔁 **Refino com a tela parada:** quando nada muda, o agente recodifica o último quadro mais duas vezes (`FlagRepeat`) para deixar o texto nítido.
-* 🔍 **Refresh de nitidez (sem perda):** 300 ms depois da tela parar, o agente tira uma captura GDI e manda em **PNG** (codec 3), só uma vez. Ela corrige o que o H.264 perde mesmo refinado: a cor em meia resolução (4:2:0), que borra texto colorido e o ClearType (no visualizador nativo com 4:4:4, a cor já chega inteira e o PNG só limpa os artefatos de compressão). Só nos presets de resolução nativa (`quality`, `quality60`), só se a imagem couber em 2 s de banda do alvo atual, e descartada se a tela mudou enquanto era comprimida. Código: [`media/still.go`](../internal/agent/media/still.go); decisão: [ADR 0009](adr/0009-refresh-de-nitidez.md).
+* 📐 **O vídeo sai do tamanho da janela do técnico:** o `cfg` leva, junto com o preset, a área onde a tela aparece, em pixels físicos (`vw`, `vh`). O agente reduz a tela para caber nela, nunca amplia, e só reabre o encoder se o tamanho de saída mudar de fato (o técnico espera 400 ms a janela parar de mudar antes de mandar). No **Tamanho real (1:1)** a área vai como 0 x 0: a resolução nativa. Assim uma tela 4K numa janela 1080p não manda 4× os pixels para o navegador jogar fora reduzindo com um filtro pior. Código: `Stream.SetViewport`, [`internal/scale`](../internal/scale).
+* 🖱️ **Cursor por cima do vídeo:** o agente manda a posição (`cur`) e o formato (`cs`) do cursor separados, e o técnico desenha o cursor local. Ele se move na hora, mesmo que o quadro ainda esteja a caminho. Mexer só o mouse não gera quadro: o DXGI avisa, mas a imagem não mudou.
+* 🔁 **Refino com a tela parada:** quando nada muda, o agente recodifica o último quadro mais duas vezes (`FlagRepeat`) para deixar o vídeo mais nítido, só se ainda há área mostrando vídeo.
+* 🔍 **Sem perda, por partes:** cada bloco de 64 px que fica 300 ms sem mudar ganha um retalho **PNG** exato, lido da própria imagem reduzida na GPU (codec 6, vários retalhos num quadro só; com 60% da tela pronta, vai a tela inteira, codec 3). Antes de cada quadro de vídeo, a mensagem **`rg`** diz onde ele vale: só nos blocos que mudaram desde o último retalho. Fora deles, o técnico mantém os pixels exatos. Um cursor de texto piscando num canto não borra mais a tela toda. Um retalho cuja área mudou durante a compressão é descartado (mostraria conteúdo velho), e tudo cabe em 2 s de banda do alvo. Código: [`media/tiles.go`](../internal/agent/media/tiles.go), [`media/still.go`](../internal/agent/media/still.go); decisões: [ADR 0009](DECISOES.md#adr-0009) e [ADR 0014](DECISOES.md#adr-0014).
+* 🧮 **Ordem no técnico:** os quadros de vídeo decodificam em paralelo e os PNG também; o técnico aplica tudo na ordem de chegada (uma fila de desenho), para um retalho não ser coberto por um vídeo mais velho nem cobrir um mais novo.
 * 🔎 **Exibição sem interpolação:** o console posiciona e dimensiona o canvas em **pixels físicos** do monitor (`devicePixelRatio`), não em CSS px, e arredonda para pixels inteiros. No modo **1:1 (Tamanho real)** cada pixel remoto ocupa exatamente um pixel do monitor, com rolagem se não couber; no modo ajustado, se sobra até 10% de espaço ele também usa 1:1 em vez de ampliar um pouco e borrar tudo. A escolha fica no `localStorage`.
 
 ---
@@ -253,22 +258,23 @@ graph LR
 <a id="fluxo"></a>
 ## 5️⃣ Controle de fluxo e bitrate
 
-> 🗣️ **Em palavras simples:** se o agente mandasse quadros mais rápido do que a internet aguenta, eles ficariam numa fila, e o técnico veria a tela de segundos atrás. Por isso o técnico **confirma** cada quadro que recebe, e o agente só deixa alguns sem confirmação no caminho: **dois** numa rede local e até **oito** quando a internet é lenta (senão, com 140 ms de ida e volta, não passaria de ~14 quadros por segundo). Quando a rede aperta, ele baixa a qualidade; quando folga, sobe de novo, aos poucos.
+> 🗣️ **Em palavras simples:** se o agente mandasse quadros mais rápido do que a internet aguenta, eles ficariam numa fila, e o técnico veria a tela de segundos atrás. Por isso o técnico **confirma** cada quadro que recebe, e o agente só deixa alguns sem confirmação no caminho: **dois** numa rede local e até **oito** quando a internet é lenta. E ele mede a **fila**: quanto o RTT de agora passa do menor RTT recente. Fila crescendo é sinal de que a banda não dá conta: a qualidade cai antes de o atraso aparecer. A qualidade só sobe quando a banda foi de fato usada sem fila.
 
 ```mermaid
 flowchart TD
-    START(["⏱️ próximo quadro"]) --> Q{"janela cheia (2 a 8)<br/>ou quadro velho sem ack?"}
-    Q -- sim --> W["espera 3 ms<br/>congested++"] --> START
+    START(["⏱️ próximo quadro"]) --> Q{"janela cheia (2 a 8) ou quadro<br/>esperando mais que RTT mín. + 50 ms?"}
+    Q -- sim --> W["espera 3 ms<br/>waits++"] --> START
     Q -- não --> N["Source.Next<br/>(espera até 1 quadro de tempo)"]
-    N --> CH{"tela mudou?"}
+    N --> CH{"a imagem mudou?"}
     CH -- não --> START
-    CH -- sim --> SEND["envia quadro seq=n<br/>flow.Sent(n)"] --> START
+    CH -- sim --> SEND["rg (onde vale) + quadro seq=n"] --> START
     ACK(["✅ ack s=n chega"]) --> RTT["flow.OnAck: libera 1 vaga<br/>e mede o RTT"]
-    SEC(["🕐 a cada 1 s"]) --> B{"houve<br/>congestionamento?"}
-    B -- "sim (≥ 10 esperas, ~30 ms)" --> DOWN["bitrate × 0,75<br/>(nunca abaixo do mínimo do preset)"]
-    B -- "soluço (1 a 9 esperas)" --> HOLD["mantém o bitrate"]
-    B -- não --> UP["bitrate × 1,2 + 50 kbps<br/>(nunca acima do máximo)"]
-    DOWN --> STATS["envia stats: enc, fps, kbps, target, rtt, w, h"]
+    SEC(["🕐 a cada 1 s"]) --> B{"fila (RTT médio − RTT mín.)<br/>ou esperas por ack?"}
+    B -- "≥ 10 esperas ou fila > 80 ms" --> DOWN["bitrate × 0,75<br/>(nunca abaixo do mínimo)"]
+    B -- "alguma espera ou fila > 30 ms" --> HOLD["mantém o bitrate"]
+    B -- "sem fila e a banda foi usada (≥ 60% do alvo)" --> UP["bitrate × 1,2 + 50 kbps<br/>(nunca acima do máximo)"]
+    B -- "sem fila, mas a tela quase parada" --> HOLD
+    DOWN --> STATS["stats: enc, fps, kbps, target, rtt, rttmin, encus, w, h"]
     HOLD --> STATS
     UP --> STATS
 ```
@@ -276,13 +282,16 @@ flowchart TD
 | Regra | Valor | Onde |
 |---|---|---|
 | Quadros em trânsito | a janela: os quadros que cabem no menor RTT visto, mais um, entre 2 e 8. Com 60 fps: 2 em LAN, 5 com 50 ms, 8 com 140 ms (~57 fps). Usa o **menor** RTT para a própria fila não aumentar a janela | [`media/flow.go`](../internal/agent/media/flow.go) (`Window`, `TestFlowControlWindowFollowsRTT`) |
-| Quadro velho sem ack | se o mais antigo passa de 3× o menor RTT (mínimo 50 ms), espera mesmo com vaga na janela: é fila se formando na rede | `TestFlowControlWideWindowStillStopsOnQueue` |
+| Quadro velho sem ack | se o mais antigo passa do menor RTT + 50 ms (`QueueBudget`; mínimo 50 ms), espera mesmo com vaga na janela: é fila se formando. Um valor fixo, não proporcional ao RTT: o antigo 3× deixava a fila chegar a ~420 ms com o relay atrás de um túnel | `TestFlowControlWideWindowStillStopsOnQueue` |
+| Menor RTT | o menor dos últimos 10 s (não a última amostra, que pode estar inflada pela própria fila) | `FlowControl.ResetMinRTT` |
 | Quando o técnico confirma | assim que o quadro chega, antes de decodificar (navegador e visualizador): o tempo de decodificar não entra no RTT | `session.ts`, `viewer/client` |
 | Ack perdido | depois de 3 s sem ack, o agente supõe que ele se perdeu e libera a vaga | `flow.go` (teste `TestFlowControlLostAck`) |
 | Ack falso ou repetido | ignorado | `TestFlowControlIgnoresBogusAcks` |
-| Queda de bitrate | −25% por segundo congestionado (≥ `CongestedThreshold` = 10 esperas de 3 ms) | `media.NextBitrate` |
-| Soluço isolado | 1 a 9 esperas no segundo: mantém o bitrate. Pela Cloudflare um atraso pontual é comum e não deve derrubar a qualidade | `media.NextBitrate` |
-| Subida de bitrate | +20% + 50 kbps por segundo livre: recupera uma queda de 25% em ~2 s (com +10% a imagem ficava vários segundos borrada) | `media.NextBitrate` |
+| Queda de bitrate | −25% por segundo com fila de verdade: ≥ 10 esperas de 3 ms (`CongestedThreshold`) ou fila > 80 ms (`QueueHigh`) | [`media/rate.go`](../internal/agent/media/rate.go), `TestRateControl` |
+| Segura | 1 a 9 esperas, ou fila entre 30 e 80 ms (`QueueLow`). Pela Cloudflare um atraso pontual é comum e não deve derrubar a qualidade | `RateControl.Next` |
+| Subida de bitrate | +20% + 50 kbps por segundo sem fila, **só se o alvo foi de fato usado** (≥ 60%). Com a tela quase parada o encoder manda bem menos que o alvo; subir nesse tempo (como antes) fazia a primeira rolagem sair com o bitrate máximo e entupir o link | `RateControl.Next` |
+| Encoder lento | captura + codificação acima de 60% do tempo de um quadro por 2 s seguidos: o encoder passa a priorizar velocidade (qualidade × velocidade 100 → 50 → 0) | `SpeedTuner`, `TestStatsAndSlowEncoder` |
+| Buffer do encoder | 4 quadros no bitrate alvo (~67 ms a 60 fps): nenhum quadro leva mais que isso para passar num link que dá conta do alvo | `rcenc.h` (`enc_buffers`) |
 | Keyframe sob pedido | `kf` descarta o que está em trânsito | `Stream.RequestKeyframe` |
 
 ---
@@ -466,7 +475,7 @@ flowchart TD
 | `suporte-ti-servico.exe uninstall` | para, remove o serviço e apaga `%ProgramFiles%\RemoteIT` |
 | `suporte-ti.exe` | portátil; `install`/`uninstall` também funcionam nele |
 
-👉 Passo a passo para o usuário, e o que fazer quando algo dá errado: [AGENTE-WINDOWS.md](AGENTE-WINDOWS.md).
+👉 Passo a passo para o usuário, e o que fazer quando algo dá errado: [WINDOWS.md](WINDOWS.md#agente).
 
 ---
 
@@ -546,7 +555,7 @@ sequenceDiagram
 
 * 🔗 **Vincular e-mail a uma conta antiga:** `POST /api/account/email` (pede a senha) → link `/#/confirmar-email` de 1 h → `POST /api/account/email/complete`. Funciona mesmo se a pessoa abrir o link deslogada.
 * 🙈 **202 sempre:** a resposta não revela se o e-mail tem conta.
-* 👉 Rotas e códigos de resposta: [API.md](API.md). Decisão: [ADR 0006](adr/0006-contas-por-email.md).
+* 👉 Rotas e códigos de resposta: [ARQUITETURA.md](ARQUITETURA.md#api). Decisão: [ADR 0006](DECISOES.md#adr-0006).
 
 ---
 
@@ -570,7 +579,7 @@ sequenceDiagram
 ```
 
 * 🗜️ **Pelo navegador vem um `.zip`:** os botões do console (`/download/*.zip`) e o link de instalação (`/i/<código>`) entregam um `.zip` com o `.exe` e um `LEIA-ME.txt`. Um `.exe` solto é o que os navegadores mais seguram ("não é baixado com frequência") e renomeiam. As rotas `.exe` continuam para `curl`, para a atualização automática e para o comando do PowerShell (`/i/<código>/exe`). Ao rodar o `.exe` extraído, o SmartScreen do Windows ainda pode avisar: o zip não substitui assinatura de código. Código: [`httpapi/zip.go`](../internal/relay/httpapi/zip.go).
-* 🏷️ **Cada download é único:** o relay grava o código do técnico no `.exe` ([fluxo 13](#maquinas)), então dois arquivos baixados nunca têm o mesmo hash. Para conferir o que está instalado, veja [AGENTE-WINDOWS.md](AGENTE-WINDOWS.md#conferir-versao).
+* 🏷️ **Cada download é único:** o relay grava o código do técnico no `.exe` ([fluxo 13](#maquinas)), então dois arquivos baixados nunca têm o mesmo hash. Para conferir o que está instalado, veja [WINDOWS.md](WINDOWS.md#conferir-versao).
 * 🔐 **Só para quem está logado** (ou com um link de instalação): sem cookie, as rotas de download respondem 401. O `private` impede que um cache compartilhado guarde um arquivo que cadastra máquinas no nome de alguém.
 
 ---
@@ -713,21 +722,26 @@ sequenceDiagram
 <a id="visualizador"></a>
 ## 1️⃣5️⃣ Visualizador do técnico (Windows)
 
-> 🗣️ **Em palavras simples:** o visualizador fala com o relay exatamente como o console no navegador: mesmo login, mesma lista, mesmo WebSocket de tela. A diferença está nas pontas: ele decodifica o vídeo pelo Windows (na placa de vídeo) e pega o teclado inteiro antes do Windows, para Win e Alt+Tab irem para o PC remoto. Guia: [VISUALIZADOR.md](VISUALIZADOR.md).
+> 🗣️ **Em palavras simples:** o visualizador fala com o relay exatamente como o console no navegador: mesmo login, mesma lista, mesmo WebSocket de tela. A diferença está nas pontas: ele decodifica e desenha o vídeo pela placa de vídeo do Windows, sem passar pela memória, e pega o teclado inteiro antes do Windows, para Win e Alt+Tab irem para o PC remoto. Se o relay roda no mesmo PC (o relay em casa), ele abre a tela **direto pelo endereço local**, sem a volta pela internet. Guia: [WINDOWS.md](WINDOWS.md#visualizador).
 
 ```mermaid
 sequenceDiagram
     autonumber
     participant T as 🧑‍💻 Técnico (teclado)
     participant V as 🖥️ remoteit-tecnico.exe
-    participant R as 🔀 Relay
+    participant R as 🔀 Relay (público)
+    participant L as 🏠 Relay (endereço local)
     participant A as 🖥️ Agente
     V->>R: POST /api/login (token guardado com DPAPI)
     V->>R: GET /api/agents a cada 3 s
-    V->>R: GET /ws/viewer?id=m_… (mesmo cookie)
-    V->>A: hello {codecs: avc444, av1, h264, jpeg — o que o Windows decodifica}
-    A->>V: quadro AVC444 → 2× Media Foundation (GPU) → recompõe 4:4:4 → BGRA → GDI
-    V->>A: ack (só depois de desenhar)
+    V->>R: GET /api/viewer/route (logado)
+    R-->>V: {local: http://localhost:3000, instance: X}
+    V->>L: GET /api/relay (sem cookie)
+    L-->>V: {instance: X} — é o mesmo relay
+    V->>L: GET /ws/viewer?id=m_… (cookie no cabeçalho)
+    V->>A: hello {codecs: avc444, av1, h264, jpeg} · cfg {p, vw, vh: área da janela}
+    A->>V: rg (onde vale) + quadro AVC444
+    V->>V: 2× Media Foundation (DXVA) → texturas NV12 → shader 4:4:4 → só na região → Present
     T->>V: Win+R (hook de teclado: não chega ao Windows local)
     V->>A: kd MetaLeft · kd KeyR · ku… (nomes do protocolo)
     T->>V: Ações ▸ Enviar área de transferência
@@ -735,10 +749,13 @@ sequenceDiagram
     A->>A: só com consentimento: põe o texto na área de transferência
 ```
 
+* 🏠 **Rota local:** com `RELAY_LOCAL_URL` no relay, o visualizador pergunta o endereço local, confere em `/api/relay` (sem mandar a sessão) que do outro lado está **o mesmo processo** e só então abre a tela por ali, com o cookie num cabeçalho. Não chegou ou não é o mesmo: usa o endereço de sempre. A barra mostra **Rota local** ou **internet**. Com o relay num PC de casa atrás de um túnel, isso tira ~90 ms de cada ida e volta ([ADR 0014](DECISOES.md#adr-0014)).
+* 🎨 **Desenho na GPU:** o decodificador entrega o NV12 numa textura do mesmo dispositivo Direct3D 11 do desenho; um shader converte (ou recompõe o 4:4:4) e pinta só a região do quadro numa textura que guarda a tela inteira, onde também entram os retalhos sem perda. Uma janela filha recebe o desenho e deixa os cliques passarem para a janela da sessão. Sem Direct3D 11 que leia NV12 em shader (ou com `REMOTEIT_VIEWER_GDI=1`), fica o desenho pela CPU com GDI, com a mesma composição ([`decode.Canvas`](../internal/viewer/decode/canvas.go)).
+
 | Detalhe | Onde |
 |---|---|
-| API e protocolo (Go puro, testado no Linux) | [`internal/viewer/client`](../internal/viewer/client) |
-| H.264, AVC444 e AV1 pelo Media Foundation, GPU (DXVA) ou CPU; recomposição 4:4:4 em C (`yuv.h`); JPEG/PNG | [`internal/viewer/decode`](../internal/viewer/decode) |
-| Janelas, desenho, mouse, hook de teclado, teclas mortas | [`internal/viewer/win`](../internal/viewer/win) |
+| API, protocolo e rota local (Go puro, testado no Linux) | [`internal/viewer/client`](../internal/viewer/client) |
+| H.264, AVC444 e AV1 pelo Media Foundation, GPU (DXVA) ou CPU; direto na textura (`rd_decode_tex`) ou na memória; JPEG/PNG | [`internal/viewer/decode`](../internal/viewer/decode) |
+| Desenho na GPU: composição por região, cor em shader, ajuste à janela | [`internal/viewer/render`](../internal/viewer/render) |
+| Janelas, mouse, hook de teclado, teclas mortas | [`internal/viewer/win`](../internal/viewer/win) |
 | Tabela de teclas compartilhada com o agente | [`internal/protocol/keys.go`](../internal/protocol/keys.go) |
-
