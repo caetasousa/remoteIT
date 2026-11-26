@@ -91,6 +91,12 @@ O formato segue o [Keep a Changelog](https://keepachangelog.com/pt-BR/1.1.0/) e 
 
 ### Changed
 
+- **Visualizador do técnico no visual do console**: as cores, a JetBrains Mono (embutida no .exe,
+  só com os caracteres usados, licença OFL), os rótulos em maiúsculas, os campos pretos com contorno
+  que acende no foco, o botão principal ciano com a seta e a lista como a tabela do console.
+- **Fechar o visualizador encerra a sessão**: as telas abertas fecham, o relay invalida o token e o
+  `viewer.token` é apagado; da próxima vez ele pede a senha. A atualização automática continua
+  reabrindo já logada.
 - **Controle de fluxo e bitrate pela fila**: um quadro pode esperar o RTT mínimo + 50 ms (era 3×,
   ~420 ms com o relay atrás do túnel); o bitrate cai com fila acima de 80 ms e só sobe quando o alvo
   foi usado; pisos de 1 a 5 Mbps (o padrão não descia de 15) e início moderado; o RTT mínimo é o
@@ -143,6 +149,9 @@ O formato segue o [Keep a Changelog](https://keepachangelog.com/pt-BR/1.1.0/) e 
 
 ### Fixed
 
+- Visualizador do técnico torto com o Windows em 125% ou 150%: a janela nascia no tamanho de 100% e
+  os campos, já na escala, passavam da borda direita. Agora a janela tem a área certa em qualquer
+  escala, acompanha a troca de monitor e, em tela baixa, encolhe a lista para caber.
 - Console: com o nome comprido do encoder da Intel e os chips novos, a telemetria da tela remota
   quebrava para uma segunda linha, atrás da tela, e sumia inteira (inclusive Codec, Resolução,
   FPS, Banda e RTT). Agora a barra é fixa: uma linha, sempre os mesmos campos, cada um com

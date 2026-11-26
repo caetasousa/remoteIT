@@ -75,6 +75,8 @@ var (
 	pGetDpiForWindow        = user32.NewProc("GetDpiForWindow")
 	pSetForegroundWindow    = user32.NewProc("SetForegroundWindow")
 	pIsWindowVisible        = user32.NewProc("IsWindowVisible")
+	pAdjustWindowRectEx     = user32.NewProc("AdjustWindowRectEx")
+	pAdjustWindowRectDpi    = user32.NewProc("AdjustWindowRectExForDpi")
 
 	pStretchDIBits     = gdi32.NewProc("StretchDIBits")
 	pSetStretchBltMode = gdi32.NewProc("SetStretchBltMode")
@@ -88,6 +90,7 @@ var (
 	pEllipse           = gdi32.NewProc("Ellipse")
 	pDeleteObject      = gdi32.NewProc("DeleteObject")
 	pIntersectClipRect = gdi32.NewProc("IntersectClipRect")
+	pSetTextCharExtra  = gdi32.NewProc("SetTextCharacterExtra")
 
 	pGetModuleHandleW = kernel32.NewProc("GetModuleHandleW")
 	pGlobalLock       = kernel32.NewProc("GlobalLock")
@@ -191,16 +194,26 @@ const (
 	htClient = 1
 	idcArrow = 32512
 
-	colorBg     = 0x00080402 // #020408 (BGR): o mesmo fundo do console
-	colorPanel  = 0x00120A06
-	colorText   = 0x00D8D2C7
-	colorAccent = 0x00FFF000 // #00f0ff
-	colorMuted  = 0x00786B5B
-	colorLine   = 0x00332619 // #192633: divisórias
-	colorSel    = 0x00281A0C // #0c1a28: linha selecionada
-	colorGood   = 0x0099D334 // #34d399
-	colorWarn   = 0x0024BFFB // #fbbf24
-	colorBad    = 0x008571FB // #fb7185
+	// os tokens do console web (frontend/src/app.css), em BGR; as linhas
+	// translúcidas do CSS já vêm misturadas ao fundo onde são desenhadas
+	colorBg         = 0x00080402 // --bg #020408
+	colorPanel      = 0x00120A06 // --surface #060a12: cabeçalho, rodapé, barra
+	colorSheet      = 0x00160E0A // --panel #0a0e16: a lista de máquinas
+	colorInput      = 0x00000000 // fundo dos campos
+	colorText       = 0x00D8D2C7 // --fg #c7d2d8
+	colorStrong     = 0x00F9F5F1 // --strong #f1f5f9
+	colorAccent     = 0x00FFF000 // --acc #00f0ff
+	colorAccentDown = 0x00C0B400 // ciano apertado
+	colorAccentOff  = 0x00837A01 // ciano a 50%: botão principal desabilitado
+	colorMuted      = 0x00786B5B // --mut #5b6b78
+	colorDim        = 0x005C5244 // --dim #44525c
+	colorLine       = 0x002B2502 // --line sobre o fundo: divisórias
+	colorLineStrong = 0x005E5701 // --line-strong: borda dos campos e botões
+	colorLineSoft   = 0x00271E09 // --line-soft sobre o painel: entre linhas da lista
+	colorSel        = 0x002D2509 // --acc-wash sobre o painel: linha selecionada
+	colorGood       = 0x00EED322 // --ok #22d3ee
+	colorWarn       = 0x0024BFFB // --warn #fbbf24
+	colorBad        = 0x008571FB // --bad #fb7185
 
 	wmDrawItem    = 0x002B
 	wmMeasureItem = 0x002C
@@ -212,6 +225,12 @@ const (
 	enChange          = 0x0300
 	odsSelected       = 0x0001
 	odsDisabled       = 0x0004
+	odsFocus          = 0x0010
+	enSetFocus        = 0x0100
+	enKillFocus       = 0x0200
+	wmDpiChanged      = 0x02E0
+	swpNoMove         = 0x0002
+	lbSetItemHeight   = 0x01A0
 	odtListbox        = 2
 	odtButton         = 4
 	vkReturn          = 0x0D

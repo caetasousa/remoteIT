@@ -7,6 +7,8 @@ import (
 	"errors"
 	"fmt"
 	"runtime"
+	"slices"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"syscall"
@@ -40,12 +42,38 @@ const (
 	idFilter  = 207
 )
 
-// Medidas da janela principal, em pixels lógicos (96 dpi).
+// Medidas da janela principal, em pixels lógicos (96 dpi): tudo passa por
+// a.px, inclusive o tamanho da janela, para nada sair da borda a 125% ou 150%.
 const (
-	headerH = 64 // faixa da marca
-	footerH = 30 // rodapé com versão e decodificadores
-	rowH    = 52 // linha da lista de máquinas
+	clientW  = 440 // área útil da janela principal
+	clientH  = 620 // altura preferida; em tela baixa, a lista encolhe
+	minH     = 560 // o que o formulário de login precisa
+	margin   = 24  // margem lateral do conteúdo
+	contentW = clientW - 2*margin
+	headerH  = 56 // faixa da marca
+	footerH  = 28 // rodapé com versão e decodificadores
+	rowH     = 52 // linha da lista de máquinas
+	fieldH   = 40 // caixa de um campo de texto
+	buttonH  = 42
 )
+
+// Posição dos elementos (y lógico do topo).
+const (
+	loginTitleY = headerH + 28 // "ENTRAR NO CONSOLE"
+	relayY      = loginTitleY + 42
+	userY       = relayY + 86
+	passY       = userY + 86
+	loginBtnY   = passY + 84
+	errorY      = loginBtnY + buttonH + 16
+
+	filterY  = headerH + 28 // "BUSCAR MÁQUINA"
+	summaryY = filterY + 20 + fieldH + 12
+	listY    = summaryY + 26
+)
+
+// actionsY é o topo dos botões da lista: presos ao pé da janela, que tem
+// a.height de altura útil.
+func (a *App) actionsY() int32 { return a.height - footerH - margin - buttonH }
 
 // Settings é o que o visualizador lembra entre execuções.
 type Settings struct {
@@ -84,10 +112,12 @@ type App struct {
 	handlers map[windows.HWND]func(windows.HWND, uint32, uintptr, uintptr) (uintptr, bool)
 	hook     uintptr
 
-	font, bgBrush, panelBrush, editBrush uintptr
+	font, bgBrush, sheetBrush, editBrush uintptr
 	fontBold, fontSmall, fontTitle       uintptr
-	fontMono                             uintptr
+	fontMono, fontLabel, fontButton      uintptr
+	embedded                             bool // a JetBrains Mono embutida carregou
 	dpi                                  int32
+	height                               int32    // altura útil, em pixels lógicos
 	caps                                 decoders // o que este PC decodifica
 	capsKnown                            bool
 	rows                                 []ui.Row // o que está na lista agora
@@ -112,8 +142,9 @@ func Run(opts Options) error {
 		sessions: map[windows.HWND]*sessionWin{}, handlers: map[windows.HWND]func(windows.HWND, uint32, uintptr, uintptr) (uintptr, bool){}}
 	theApp = a
 	a.bgBrush, _, _ = pCreateSolidBrush.Call(colorBg)
-	a.panelBrush, _, _ = pCreateSolidBrush.Call(colorPanel)
-	a.editBrush, _, _ = pCreateSolidBrush.Call(0x00000000)
+	a.sheetBrush, _, _ = pCreateSolidBrush.Call(colorSheet)
+	a.editBrush, _, _ = pCreateSolidBrush.Call(colorInput)
+	a.embedded = loadFonts()
 
 	cb := syscall.NewCallback(wndProc)
 	for _, name := range []string{mainClass, sessionClass, videoClass} {
@@ -128,16 +159,16 @@ func Run(opts Options) error {
 		}
 	}
 
-	a.main = a.createWindow(mainClass, "RemoteIT — Técnico", wsOverlappedWindow&^0x00040000&^0x00010000|wsClipChildren, 480, 640, 0)
+	// a escala do monitor só se sabe com a janela criada: ela nasce
+	// escondida e ganha o tamanho certo (fitMain) antes de aparecer
+	a.main = a.createWindow(mainClass, "RemoteIT — Técnico", wsOverlappedWindow&^0x00040000&^0x00010000|wsClipChildren, clientW, clientH, 0)
 	a.handlers[a.main] = a.mainProc
 	dpi, _, _ := pGetDpiForWindow.Call(uintptr(a.main))
 	a.dpi = int32(max(dpi, 96))
-	a.font = a.newFont(15, 400, "Segoe UI")
-	a.fontBold = a.newFont(15, 600, "Segoe UI")
-	a.fontSmall = a.newFont(12, 400, "Segoe UI")
-	a.fontTitle = a.newFont(22, 600, "Segoe UI")
-	a.fontMono = a.newFont(13, 400, "Consolas")
+	a.fitMain(nil)
+	a.makeFonts()
 	a.buildControls()
+	a.place()
 	// o que este PC decodifica aparece no rodapé; os decodificadores do
 	// Windows ficam presos à thread, então a sondagem tem a sua
 	go func() {
@@ -189,6 +220,71 @@ func (a *App) newFont(size, weight int32, face string) uintptr {
 	return f
 }
 
+// makeFonts (re)cria as fontes na escala atual: a JetBrains Mono do
+// console, nos tamanhos dele (13 px o texto, 11 px os rótulos).
+func (a *App) makeFonts() {
+	old := []uintptr{a.font, a.fontBold, a.fontSmall, a.fontTitle, a.fontMono, a.fontLabel, a.fontButton}
+	face, bold := faceMono, faceMonoBold
+	if !a.embedded {
+		face, bold = faceFallback, faceFallback
+	}
+	a.font = a.newFont(13, 400, face)
+	a.fontBold = a.newFont(13, 600, bold)
+	a.fontSmall = a.newFont(11, 400, face)
+	a.fontLabel = a.newFont(11, 600, bold)
+	a.fontButton = a.newFont(12, 600, bold)
+	a.fontTitle = a.newFont(14, 600, bold)
+	a.fontMono = a.newFont(12, 400, face)
+	for _, f := range old {
+		if f != 0 {
+			pDeleteObject.Call(f)
+		}
+	}
+}
+
+// fitMain dá à janela principal a área útil clientW x clientH na escala
+// atual; com at, também a posição (a sugerida pelo Windows ao mudar de
+// monitor).
+func (a *App) fitMain(at *rect) {
+	style, _, _ := pGetWindowLongPtrW.Call(uintptr(a.main), uintptr(gwlStyleIndex()))
+	outer := func(h int32) rect {
+		r := rect{0, 0, a.px(clientW), a.px(h)}
+		if pAdjustWindowRectDpi.Find() == nil {
+			pAdjustWindowRectDpi.Call(uintptr(unsafe.Pointer(&r)), style, 0, 0, uintptr(a.dpi))
+		} else {
+			pAdjustWindowRectEx.Call(uintptr(unsafe.Pointer(&r)), style, 0, 0)
+		}
+		return r
+	}
+	// em notebook a 150% (1280 x 720 lógicos menos a barra de tarefas) a
+	// altura preferida pode não caber: a janela encolhe até minH
+	a.height = clientH
+	mon, _, _ := pMonitorFromWindow.Call(uintptr(a.main), monitorDefaultToNearest)
+	mi := monitorInfo{}
+	mi.Size = uint32(unsafe.Sizeof(mi))
+	if r, _, _ := pGetMonitorInfoW.Call(mon, uintptr(unsafe.Pointer(&mi))); r != 0 {
+		if extra := outer(clientH).h() - mi.Work.h(); extra > 0 {
+			a.height = max(clientH-(extra*96+a.dpi-1)/a.dpi, minH)
+		}
+	}
+	r := outer(a.height)
+	flags := uintptr(swpNoZOrder | swpNoActivate)
+	var x, y int32
+	if at != nil {
+		x, y = at.Left, at.Top
+	} else {
+		flags |= swpNoMove
+	}
+	pSetWindowPos.Call(uintptr(a.main), 0, uintptr(x), uintptr(y), uintptr(r.w()), uintptr(r.h()), flags)
+	if at == nil { // nasce no alto da área de trabalho, para caber inteira
+		var w rect
+		pGetWindowRect.Call(uintptr(a.main), uintptr(unsafe.Pointer(&w)))
+		if w.Bottom > mi.Work.Bottom && mi.Size != 0 {
+			pSetWindowPos.Call(uintptr(a.main), 0, uintptr(w.Left), uintptr(max(mi.Work.Top, mi.Work.Bottom-w.h())), 0, 0, swpNoZOrder|swpNoActivate|0x0001) // SWP_NOSIZE
+		}
+	}
+}
+
 func (a *App) createWindow(class, title string, style uintptr, w, h int32, parent windows.HWND) windows.HWND {
 	scale := func(v int32) uintptr {
 		if a.dpi == 0 {
@@ -201,33 +297,81 @@ func (a *App) createWindow(class, title string, style uintptr, w, h int32, paren
 	return windows.HWND(hwnd)
 }
 
-func (a *App) control(id int, class, text string, style uintptr, x, y, w, h int32) windows.HWND {
+func (a *App) control(id int, class, text string, style uintptr) windows.HWND {
 	hwnd, _, _ := pCreateWindowExW.Call(0, uintptr(unsafe.Pointer(utf16(class))), uintptr(unsafe.Pointer(utf16(text))),
-		wsChild|style, uintptr(a.px(x)), uintptr(a.px(y)), uintptr(a.px(w)), uintptr(a.px(h)), uintptr(a.main), uintptr(id), 0, 0)
-	pSendMessageW.Call(hwnd, wmSetFont, a.font, 1)
+		wsChild|style, 0, 0, 1, 1, uintptr(a.main), uintptr(id), 0, 0)
 	a.ctl[id] = windows.HWND(hwnd)
 	return windows.HWND(hwnd)
 }
 
+// field é um campo de texto como os do console: rótulo em maiúsculas em
+// cima e uma caixa preta com contorno, que a janela principal desenha (o
+// EDIT fica dentro dela, sem borda própria).
+type field struct {
+	id    int
+	label string
+	y     int32 // topo do rótulo; a caixa vem 20 px abaixo
+}
+
+var (
+	loginFields = []field{{idRelay, "Endereço do relay", relayY}, {idUser, "Usuário ou e-mail", userY}, {idPass, "Senha", passY}}
+	listFields  = []field{{idFilter, "Buscar máquina", filterY}}
+)
+
+// box é a caixa de um campo, em pixels físicos.
+func (a *App) box(f field) rect {
+	y := f.y + 20
+	return rect{a.px(margin), a.px(y), a.px(margin + contentW), a.px(y + fieldH)}
+}
+
+// listBox é a moldura da lista de máquinas, em pixels físicos.
+func (a *App) listBox() rect {
+	return rect{a.px(margin), a.px(listY), a.px(margin + contentW), a.px(a.actionsY() - 16)}
+}
+
 func (a *App) buildControls() {
-	top := int32(headerH + 24)
-	// login
-	a.control(301, "STATIC", "Endereço do relay", ssLeft, 32, top, 400, 20)
-	a.control(idRelay, "EDIT", a.settings.Relay, wsBorder|wsTabStop|esAutoHScroll, 32, top+22, 400, 30)
-	a.control(302, "STATIC", "Usuário ou e-mail", ssLeft, 32, top+66, 400, 20)
-	a.control(idUser, "EDIT", a.settings.Username, wsBorder|wsTabStop|esAutoHScroll, 32, top+88, 400, 30)
-	a.control(303, "STATIC", "Senha", ssLeft, 32, top+132, 400, 20)
-	a.control(idPass, "EDIT", "", wsBorder|wsTabStop|esAutoHScroll|esPassword, 32, top+154, 400, 30)
-	a.control(idLogin, "BUTTON", "Entrar", wsTabStop|bsOwnerDraw, 32, top+204, 400, 38)
-	a.control(idError, "STATIC", "", ssLeft, 32, top+254, 400, 60)
-	// lista
-	a.control(304, "STATIC", "Buscar por nome, dono ou usuário", ssLeft, 24, headerH+12, 416, 20)
-	a.control(idFilter, "EDIT", "", wsBorder|wsTabStop|esAutoHScroll, 24, headerH+34, 416, 30)
-	a.control(idSummary, "STATIC", "", ssLeft, 24, headerH+74, 416, 20)
-	a.control(idList, "LISTBOX", "", wsTabStop|wsVScroll|lbsNotify|lbsNoIntegralHeight|lbsOwnerDrawFixed|lbsHasStrings,
-		24, headerH+98, 416, 310)
-	a.control(idConnect, "BUTTON", "Conectar", wsTabStop|bsOwnerDraw, 24, headerH+420, 264, 38)
-	a.control(idLogout, "BUTTON", "Sair", wsTabStop|bsOwnerDraw, 296, headerH+420, 144, 38)
+	a.control(idRelay, "EDIT", a.settings.Relay, wsTabStop|esAutoHScroll)
+	a.control(idUser, "EDIT", a.settings.Username, wsTabStop|esAutoHScroll)
+	a.control(idPass, "EDIT", "", wsTabStop|esAutoHScroll|esPassword)
+	a.control(idLogin, "BUTTON", "Entrar", wsTabStop|bsOwnerDraw)
+	a.control(idError, "STATIC", "", ssLeft)
+	a.control(idFilter, "EDIT", "", wsTabStop|esAutoHScroll)
+	a.control(idSummary, "STATIC", "", ssLeft)
+	a.control(idList, "LISTBOX", "", wsTabStop|wsVScroll|lbsNotify|lbsNoIntegralHeight|lbsOwnerDrawFixed|lbsHasStrings)
+	a.control(idConnect, "BUTTON", "Conectar", wsTabStop|bsOwnerDraw)
+	a.control(idLogout, "BUTTON", "Sair", wsTabStop|bsOwnerDraw)
+}
+
+// place posiciona os controles e lhes dá a fonte, na escala atual (de novo
+// a cada mudança de monitor).
+func (a *App) place() {
+	move := func(id int, r rect) {
+		pMoveWindow.Call(uintptr(a.ctl[id]), uintptr(r.Left), uintptr(r.Top), uintptr(r.w()), uintptr(r.h()), 1)
+	}
+	at := func(x, y, w, h int32) rect { return rect{a.px(x), a.px(y), a.px(x + w), a.px(y + h)} }
+	for _, f := range append(slices.Clone(loginFields), listFields...) {
+		b := a.box(f)
+		// o EDIT de uma linha escreve no topo: centralizado na caixa à mão
+		h := a.px(18)
+		top := b.Top + (b.h()-h)/2
+		move(f.id, rect{b.Left + a.px(12), top, b.Right - a.px(12), top + h})
+	}
+	move(idLogin, at(margin, loginBtnY, contentW, buttonH))
+	move(idError, at(margin, errorY, contentW, 72))
+	move(idSummary, at(margin, summaryY, contentW, 18))
+	l := a.listBox()
+	move(idList, rect{l.Left + 1, l.Top + 1, l.Right - 1, l.Bottom - 1})
+	pSendMessageW.Call(uintptr(a.ctl[idList]), lbSetItemHeight, 0, uintptr(a.px(rowH)))
+	move(idConnect, at(margin, a.actionsY(), contentW-128, buttonH))
+	move(idLogout, at(margin+contentW-120, a.actionsY(), 120, buttonH))
+	for id, h := range a.ctl {
+		f := a.font
+		if id == idError || id == idSummary {
+			f = a.fontSmall
+		}
+		pSendMessageW.Call(uintptr(h), wmSetFont, f, 1)
+	}
+	pInvalidateRect.Call(uintptr(a.main), 0, 1)
 }
 
 func orDash(s string) string {
@@ -242,10 +386,10 @@ func (a *App) isLoginField(h windows.HWND) bool {
 }
 
 func (a *App) showLogin(on bool) {
-	for _, id := range []int{301, idRelay, 302, idUser, 303, idPass, idLogin, idError} {
+	for _, id := range []int{idRelay, idUser, idPass, idLogin, idError} {
 		show(a.ctl[id], on)
 	}
-	for _, id := range []int{304, idFilter, idSummary, idList, idConnect, idLogout} {
+	for _, id := range []int{idFilter, idSummary, idList, idConnect, idLogout} {
 		show(a.ctl[id], !on)
 	}
 	pInvalidateRect.Call(uintptr(a.main), 0, 1) // o cabeçalho muda (usuário)
@@ -394,35 +538,63 @@ func (a *App) updateList() {
 	}
 }
 
-// paintMain desenha o cabeçalho (marca e usuário) e o rodapé (versão e o
-// que este PC decodifica); os controles se desenham sozinhos por cima.
+// paintMain desenha o que não é controle, no visual do console: o
+// cabeçalho com a marca ("> REMOTEIT") e o usuário, os rótulos e as caixas
+// dos campos, a moldura da lista e o rodapé com a versão.
 func (a *App) paintMain() {
 	var ps paintStruct
 	hdc, _, _ := pBeginPaint.Call(uintptr(a.main), uintptr(unsafe.Pointer(&ps)))
 	defer pEndPaint.Call(uintptr(a.main), uintptr(unsafe.Pointer(&ps)))
 	var rc rect
 	pGetClientRect.Call(uintptr(a.main), uintptr(unsafe.Pointer(&rc)))
+	left, right := a.px(margin), rc.Right-a.px(margin)
+
 	head := rect{0, 0, rc.Right, a.px(headerH)}
 	fillRect(hdc, head, colorPanel)
 	fillRect(hdc, rect{0, head.Bottom - 1, rc.Right, head.Bottom}, colorLine)
-	x := a.px(24)
-	drawString(hdc, rect{x, 0, rc.Right, head.Bottom}, "RemoteIT", a.fontTitle, colorAccent, dtLeft)
-	x += textWidth(hdc, "RemoteIT", a.fontTitle) + a.px(8)
-	drawString(hdc, rect{x, a.px(4), rc.Right, head.Bottom}, "técnico", a.fontSmall, colorMuted, dtLeft)
+	drawString(hdc, rect{left, 0, right, head.Bottom}, ">", a.fontTitle, colorAccent, dtLeft)
+	x := left + textWidth(hdc, ">", a.fontTitle) + a.px(10)
+	drawSpaced(hdc, rect{x, 0, right, head.Bottom}, "REMOTEIT", a.fontTitle, colorStrong, dtLeft, a.px(2))
 
 	a.mu.Lock()
 	logged := a.api != nil && a.user.Username != ""
 	user, role := a.user.Username, a.user.Role
 	caps, known := a.caps, a.capsKnown
 	a.mu.Unlock()
-	if logged && !isVisible(a.ctl[idLogin]) {
-		r := rect{0, a.px(12), rc.Right - a.px(24), a.px(34)}
-		drawString(hdc, r, user, a.fontBold, colorText, dtRight)
+	login := isVisible(a.ctl[idLogin])
+	if logged && !login {
 		label := "técnico"
 		if role == "admin" {
 			label = "administrador"
 		}
-		drawString(hdc, rect{0, a.px(32), rc.Right - a.px(24), a.px(52)}, label, a.fontSmall, colorMuted, dtRight)
+		drawString(hdc, rect{0, a.px(9), right, a.px(29)}, user, a.fontBold, colorStrong, dtRight)
+		drawSpaced(hdc, rect{0, a.px(29), right, a.px(46)}, strings.ToUpper(label), a.fontSmall, colorDim, dtRight, a.px(1))
+	} else {
+		drawSpaced(hdc, rect{0, 0, right, head.Bottom}, "TÉCNICO", a.fontSmall, colorDim, dtRight, a.px(1))
+	}
+
+	fields := listFields
+	if login {
+		fields = loginFields
+		y := a.px(loginTitleY)
+		drawSpaced(hdc, rect{left, y, right, y + a.px(18)}, "ENTRAR NO CONSOLE", a.fontLabel, colorAccent, dtLeft, a.px(2))
+		fillRect(hdc, rect{left, y + a.px(26), right, y + a.px(27)}, colorLine)
+	} else {
+		l := a.listBox()
+		fillRect(hdc, l, colorSheet)
+		frame(hdc, l, colorLine)
+	}
+	focus, _, _ := pGetFocus.Call()
+	for _, f := range fields {
+		y := a.px(f.y)
+		drawSpaced(hdc, rect{left, y, right, y + a.px(16)}, strings.ToUpper(f.label), a.fontSmall, colorMuted, dtLeft, a.px(1))
+		b := a.box(f)
+		fillRect(hdc, b, colorInput)
+		border := uintptr(colorLineStrong)
+		if windows.HWND(focus) == a.ctl[f.id] {
+			border = colorAccent
+		}
+		frame(hdc, b, border)
 	}
 
 	foot := rect{0, rc.Bottom - a.px(footerH), rc.Right, rc.Bottom}
@@ -432,43 +604,65 @@ func (a *App) paintMain() {
 	if known {
 		text += "  ·  " + ui.Decoders(caps.h264, caps.av1)
 	}
-	drawString(hdc, rect{a.px(24), foot.Top, rc.Right - a.px(24), foot.Bottom}, text, a.fontSmall, colorMuted, dtLeft)
+	drawString(hdc, rect{left, foot.Top, right, foot.Bottom}, text, a.fontSmall, colorDim, dtLeft)
 }
 
-// drawRow desenha uma máquina: ponto de estado, nome e detalhes.
+// fieldAt é o campo cuja caixa contém (x, y), na tela que está à mostra.
+func (a *App) fieldAt(x, y int32) (field, bool) {
+	fields := listFields
+	if isVisible(a.ctl[idLogin]) {
+		fields = loginFields
+	}
+	for _, f := range fields {
+		b := a.box(f)
+		if x >= b.Left && x < b.Right && y >= b.Top && y < b.Bottom {
+			return f, true
+		}
+	}
+	return field{}, false
+}
+
+// redrawBox repinta a caixa do campo id (o contorno acende com o foco).
+func (a *App) redrawBox(id int) {
+	for _, f := range append(slices.Clone(loginFields), listFields...) {
+		if f.id == id {
+			b := a.box(f)
+			pInvalidateRect.Call(uintptr(a.main), uintptr(unsafe.Pointer(&b)), 0)
+		}
+	}
+}
+
+// drawRow desenha uma máquina como a linha da tabela do console: LED de
+// estado, nome e detalhes.
 func (a *App) drawRow(d *drawItemStruct) {
 	r := d.RcItem
 	if int(d.ItemID) < 0 || int(d.ItemID) >= len(a.rows) {
-		fillRect(d.HDC, r, colorBg)
+		fillRect(d.HDC, r, colorSheet)
 		return
 	}
 	row := a.rows[d.ItemID]
 	selected := d.ItemState&odsSelected != 0
-	bg := uintptr(colorBg)
+	bg := uintptr(colorSheet)
 	if selected {
 		bg = colorSel
 	}
 	fillRect(d.HDC, r, bg)
 	if selected {
-		fillRect(d.HDC, rect{r.Left, r.Top, r.Left + a.px(3), r.Bottom}, colorAccent)
+		fillRect(d.HDC, rect{r.Left, r.Top, r.Left + a.px(2), r.Bottom}, colorAccent)
 	}
-	fillRect(d.HDC, rect{r.Left, r.Bottom - 1, r.Right, r.Bottom}, colorLine)
-	dotColor, titleColor := uintptr(colorMuted), uintptr(colorMuted)
+	fillRect(d.HDC, rect{r.Left, r.Bottom - 1, r.Right, r.Bottom}, colorLineSoft)
+	led, title, detail := uintptr(colorBad), uintptr(colorMuted), uintptr(colorDim)
 	switch row.State {
 	case ui.Online:
-		dotColor, titleColor = colorGood, colorText
+		led, title, detail = colorAccent, colorStrong, colorMuted
 	case ui.InUse:
-		dotColor, titleColor = colorWarn, colorText
+		led, title, detail = colorWarn, colorStrong, colorWarn
 	}
 	mid := (r.Top + r.Bottom) / 2
-	dot(d.HDC, r.Left+a.px(18), mid, a.px(5), dotColor)
-	x := r.Left + a.px(34)
-	drawString(d.HDC, rect{x, r.Top + a.px(6), r.Right - a.px(8), mid}, row.Title, a.fontBold, titleColor, dtLeft)
-	detail := uintptr(colorMuted)
-	if row.State == ui.InUse {
-		detail = colorWarn
-	}
-	drawString(d.HDC, rect{x, mid, r.Right - a.px(8), r.Bottom - a.px(6)}, row.Detail, a.fontSmall, detail, dtLeft)
+	dot(d.HDC, r.Left+a.px(17), mid-a.px(8), a.px(3), led)
+	x := r.Left + a.px(30)
+	drawString(d.HDC, rect{x, r.Top + a.px(6), r.Right - a.px(10), mid}, row.Title, a.fontBold, title, dtLeft)
+	drawString(d.HDC, rect{x, mid, r.Right - a.px(10), r.Bottom - a.px(6)}, row.Detail, a.fontSmall, detail, dtLeft)
 }
 
 func (a *App) connectSelected() {
@@ -491,26 +685,42 @@ func (a *App) connectSelected() {
 }
 
 func (a *App) logout() {
+	a.endSession(false)
+	a.showLogin(true)
+}
+
+// endSession fecha as telas remotas abertas e encerra a sessão do técnico
+// no relay, apagando o token guardado: quem abrir o programa depois precisa
+// entrar de novo. wait espera o relay confirmar (até 3 s), para quando o
+// processo vai acabar logo em seguida.
+func (a *App) endSession(wait bool) {
 	if a.stopList != nil {
 		a.stopList()
+		a.stopList = nil
 	}
 	for h, s := range a.sessions {
 		s.cancel()
 		pDestroyWindow.Call(uintptr(h))
 	}
-	if a.api != nil {
-		api := a.api
+	a.mu.Lock()
+	api := a.api // fica em a.api: uma conexão em andamento ainda a lê
+	a.mu.Unlock()
+	if api != nil {
+		done := make(chan struct{})
 		go func() {
-			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			defer close(done)
+			ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 			defer cancel()
 			api.Logout(ctx)
 		}()
+		if wait {
+			<-done
+		}
 	}
 	a.settings.Token = ""
 	if a.opts.Save != nil {
 		a.opts.Save(a.settings)
 	}
-	a.showLogin(true)
 }
 
 func (a *App) mainProc(hwnd windows.HWND, m uint32, wp, lp uintptr) (uintptr, bool) {
@@ -556,6 +766,8 @@ func (a *App) mainProc(hwnd windows.HWND, m uint32, wp, lp uintptr) (uintptr, bo
 	case wmCommand:
 		id, code := int(loword(wp)), hiword(wp)
 		switch {
+		case code == enSetFocus || code == enKillFocus:
+			a.redrawBox(id)
 		case id == idFilter && code == enChange:
 			a.updateList()
 		case id == idLogin && code == bnClicked:
@@ -569,30 +781,41 @@ func (a *App) mainProc(hwnd windows.HWND, m uint32, wp, lp uintptr) (uintptr, bo
 		}
 		return 0, true
 	case wmCtlColorStatic, wmCtlColorEdit, wmCtlColorListbox:
-		pSetTextColor.Call(wp, colorText)
-		bg, brush := uintptr(colorBg), a.bgBrush
-		if m != wmCtlColorStatic {
-			bg, brush = 0x00000000, a.editBrush
+		fg, bg, brush := uintptr(colorText), uintptr(colorBg), a.bgBrush
+		switch m {
+		case wmCtlColorEdit:
+			fg, bg, brush = colorStrong, colorInput, a.editBrush
+		case wmCtlColorListbox:
+			bg, brush = colorSheet, a.sheetBrush
 		}
 		switch windows.HWND(lp) {
 		case a.ctl[idError]:
-			pSetTextColor.Call(wp, colorBad)
-		case a.ctl[idSummary], a.ctl[301], a.ctl[302], a.ctl[303], a.ctl[304]:
-			pSetTextColor.Call(wp, colorMuted)
+			fg = colorBad
+		case a.ctl[idSummary]:
+			fg = colorMuted
 		}
-		switch m {
-		case wmCtlColorEdit:
-			bg, brush = colorPanel, a.panelBrush
-		case wmCtlColorListbox:
-			bg, brush = colorBg, a.bgBrush
-		}
+		pSetTextColor.Call(wp, fg)
 		pSetBkColor.Call(wp, bg)
 		return brush, true
-	case wmClose:
-		for h, s := range a.sessions {
-			s.cancel()
-			pDestroyWindow.Call(uintptr(h))
+	case wmLButtonDown: // clique na margem da caixa também foca o campo
+		if f, ok := a.fieldAt(int32(int16(loword(lp))), int32(int16(hiword(lp)))); ok {
+			pSetFocus.Call(uintptr(a.ctl[f.id]))
 		}
+		return 0, true
+	case wmDpiChanged: // foi para um monitor com outra escala
+		a.dpi = int32(max(loword(wp), 96))
+		var r rect
+		pRtlMoveMemory.Call(uintptr(unsafe.Pointer(&r)), lp, unsafe.Sizeof(r))
+		a.makeFonts()
+		a.fitMain(&r)
+		a.place()
+		return 0, true
+	case wmClose:
+		// fechar o programa é sair: a sessão termina no relay e o token
+		// guardado some (a atualização automática reinicia por outro
+		// caminho e mantém o login)
+		show(hwnd, false)
+		a.endSession(true)
 		pDestroyWindow.Call(uintptr(hwnd))
 		return 0, true
 	case wmDestroy:

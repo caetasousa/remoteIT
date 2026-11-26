@@ -262,6 +262,11 @@ O rótulo mais escuro (`#44525c`) ainda passa 4,5:1 de contraste sobre os três 
   continuar igual à imagem para o mapeamento de clique e cursor (`getBoundingClientRect`) valer.
 - **Movimento respeita `prefers-reduced-motion`.**
 - **Nada de CDN:** a fonte vai no binário, para funcionar atrás do firewall corporativo.
+- **O visualizador nativo segue os mesmos tokens.** As cores ficam em
+  `internal/viewer/win/win32_windows.go` (BGR; as réguas translúcidas já misturadas ao fundo) e a
+  JetBrains Mono vai embutida em `internal/viewer/win/fonts/`, reduzida aos caracteres que o
+  programa usa. Ao usar um caractere novo fora do latim (seta, símbolo), refaça o subconjunto com
+  `pyftsubset` ou ele sai como quadrado.
 - **Tabela no celular:** cada `td` precisa de `data-label`.
 - **Nada de `alert`/`confirm`/`prompt` do navegador.** Confirmações usam `await ask({title, message,
   confirm, danger})`, que abre o `ConfirmDialog`: segue o tema, não trava a página e aparece por cima

@@ -3,6 +3,7 @@
 package win
 
 import (
+	"strings"
 	"unsafe"
 
 	"remoteit/internal/viewer/ui"
@@ -73,25 +74,49 @@ func frame(hdc uintptr, r rect, color uintptr) {
 	fillRect(hdc, rect{r.Right - 1, r.Top, r.Right, r.Bottom}, color)
 }
 
-// drawButton desenha um botão nosso: o principal cheio de ciano, os outros
-// só com contorno.
+// drawSpaced é o drawString com espaço extra entre as letras: os rótulos
+// em maiúsculas do console (letter-spacing no CSS).
+func drawSpaced(hdc uintptr, r rect, s string, font, color uintptr, flags uintptr, extra int32) {
+	pSetTextCharExtra.Call(hdc, uintptr(extra))
+	drawString(hdc, r, s, font, color, flags)
+	pSetTextCharExtra.Call(hdc, 0)
+}
+
+// drawButton desenha um botão nosso como os do console: o principal cheio
+// de ciano, rótulo à esquerda e seta à direita; os outros só com contorno.
 func (a *App) drawButton(d *drawItemStruct, text string, primary bool) {
 	r := d.RcItem
 	pressed := d.ItemState&odsSelected != 0
 	disabled := d.ItemState&odsDisabled != 0
-	bg, fg, border := uintptr(colorPanel), uintptr(colorText), uintptr(colorLine)
+	focused := d.ItemState&odsFocus != 0
+	label := strings.ToUpper(text)
 	if primary {
-		bg, fg, border = colorAccent, colorBg, colorAccent
-		if pressed {
-			bg = 0x00C0B400 // ciano mais escuro
+		bg := uintptr(colorAccent)
+		switch {
+		case disabled:
+			bg = colorAccentOff
+		case pressed:
+			bg = colorAccentDown
 		}
-	} else if pressed {
-		bg = colorSel
+		fillRect(d.HDC, r, bg)
+		in := rect{r.Left + a.px(16), r.Top, r.Right - a.px(16), r.Bottom}
+		drawSpaced(d.HDC, in, label, a.fontButton, colorBg, dtLeft, a.px(1))
+		drawString(d.HDC, in, "→", a.fontBold, colorBg, dtRight)
+		if focused && !disabled {
+			frame(d.HDC, rect{r.Left + 2, r.Top + 2, r.Right - 2, r.Bottom - 2}, colorBg)
+		}
+		return
 	}
-	if disabled {
-		bg, fg, border = colorPanel, colorMuted, colorLine
+	bg, fg, border := uintptr(colorBg), uintptr(colorText), uintptr(colorLineStrong)
+	switch {
+	case disabled:
+		fg = colorDim
+	case pressed:
+		bg, fg = colorSel, colorStrong
+	case focused:
+		border = colorAccent
 	}
 	fillRect(d.HDC, r, bg)
 	frame(d.HDC, r, border)
-	drawString(d.HDC, r, text, a.fontBold, fg, dtCenter)
+	drawSpaced(d.HDC, r, label, a.fontButton, fg, dtCenter, a.px(1))
 }

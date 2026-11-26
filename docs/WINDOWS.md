@@ -270,11 +270,13 @@ Um `.exe` que captura a tela e injeta mouse e teclado se comporta como um malwar
 2. Extraia o `remoteit-tecnico.exe` do `.zip` onde quiser (ex.: Área de Trabalho) e dê dois cliques. Se o SmartScreen aparecer: *Mais informações* → *Executar assim mesmo*.
 3. Entre com o mesmo usuário e senha do console. O endereço do relay já vem preenchido.
 
-O login fica guardado (protegido pelo Windows, só para o seu usuário) em `%LOCALAPPDATA%\RemoteIT\viewer.token`. **Sair** apaga.
+Fechar o visualizador é sair: as telas remotas abertas fecham, a sessão termina no relay e da próxima vez ele pede a senha de novo. Enquanto ele está aberto, o login fica guardado (protegido pelo Windows, só para o seu usuário) em `%LOCALAPPDATA%\RemoteIT\viewer.token`, para a atualização automática reabrir já logado; **Sair** e fechar a janela apagam.
+
+O visual é o do console web (cores, JetBrains Mono, rótulos em maiúsculas, bordas retas) e acompanha a escala do Windows (100%, 125%, 150%…), inclusive ao arrastar a janela para outro monitor.
 
 ### 🧭 Usar
 
-* **Lista:** as suas máquinas (admins veem todas), atualizada a cada 3 s, online primeiro. Cada linha tem um ponto de estado (🟢 online, 🟡 em uso por outro técnico, ⚪ offline), o nome e, embaixo, o usuário logado no PC, o dono (para admins) e a versão do agente. **Buscar** filtra por nome, dono ou usuário. Dois cliques, **Enter** ou **Conectar** abrem uma janela por máquina.
+* **Lista:** as suas máquinas (admins veem todas), atualizada a cada 3 s, online primeiro. Cada linha tem um LED de estado (ciano online, âmbar em uso por outro técnico, rosa offline), o nome e, embaixo, o usuário logado no PC, o dono (para admins) e a versão do agente. **Buscar** filtra por nome, dono ou usuário. Dois cliques, **Enter** ou **Conectar** abrem uma janela por máquina.
 * **Rodapé:** a versão do visualizador e o que **este PC** decodifica (H.264, 4:4:4, AV1).
 * **Barra de telemetria** (embaixo da sessão): codec em uso (em ciano quando é **4:4:4**), decodificação na GPU ou CPU, resolução, **FPS desenhados aqui**, banda, RTT (verde até 60 ms, âmbar até 150 ms, rosa acima), **Fila** (quanto os quadros esperam em algum buffer do caminho; verde até 30 ms), **Codif.** (captura + codificação no PC remoto), **Decod.** (decodificação + desenho aqui). Os campos são sempre os mesmos, em posições fixas ("—" sem dado); numa janela estreita, os últimos ficam de fora. A rota (local ou internet) aparece no Diagnóstico. À direita, em âmbar, o motivo quando a **Cor 4:4:4** está ligada mas não está em uso. Some em tela cheia; liga e desliga em **Exibir ▸ Barra de telemetria**.
 * **Tamanho do vídeo:** o agente manda a tela do tamanho da janela (reduzida com um filtro próprio para texto). Ao redimensionar, o visualizador espera a janela parar e pede o tamanho novo. Em **Tamanho real (1:1)**, vem a resolução nativa.
