@@ -143,6 +143,11 @@ O formato segue o [Keep a Changelog](https://keepachangelog.com/pt-BR/1.1.0/) e 
 
 ### Fixed
 
+- Console: com o nome comprido do encoder da Intel e os chips novos, a telemetria da tela remota
+  quebrava para uma segunda linha, atrás da tela, e sumia inteira (inclusive Codec, Resolução,
+  FPS, Banda e RTT). Agora a barra é uma linha só a partir de 1100 px, o Codec mostra o nome
+  curto e, faltando espaço, somem primeiro os chips menos importantes.
+
 - **Poucos quadros por segundo com internet lenta** (~14 fps com 140 ms de RTT): o agente deixava só
   2 quadros sem confirmação a caminho; agora a janela acompanha o RTT, de 2 a 8. O visualizador
   nativo confirma o quadro ao recebê-lo, antes de decodificar, como o navegador já fazia.

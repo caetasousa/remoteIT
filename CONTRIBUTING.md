@@ -140,6 +140,7 @@ container e derruba tudo com `down -v`.
 | associar e-mail | conta antiga confirma o link mesmo tendo saído |
 | técnico isolado | admin cadastra um técnico; o técnico **não vê** a máquina do admin nem tem botão de compartilhar; o acesso do admin aparece na auditoria encerrado |
 | link de instalação | os três botões de download apontam para os `.zip`; gerar pela tela um link **sem prazo e sem limite**; ele abre sem login; um link inventado dá 404; o **comando do PowerShell** aparece e o script `/ps` responde (404 para link inventado); **revogar abre o modal**: Esc cancela, o botão revoga e o link para de baixar |
+| telemetria na barra | com o `stats` de produção trocado no caminho (nome comprido do encoder da Intel, fila, codificação) numa tela de 1280 px, Codec, Resolução, FPS, Banda e RTT aparecem inteiros dentro da barra (antes, a telemetria quebrava para uma linha escondida e sumia) |
 | desenho do console (`render.spec.ts`) | sem relay nem agente: `render.ts` numa página vazia. **A recomposição 4:4:4 em WebGL bate com a referência em Go** (no máximo 1 nível; `e2e/fixtures/avc444.json`), com e sem a visão auxiliar; o vídeo só pinta a região, e o retalho sem perda fica |
 
 Falhou? O Playwright grava trace em `frontend/test-results/`; abra com `npx playwright show-trace`.
@@ -293,7 +294,17 @@ ficar desalinhado:
   inteiros, porque meio pixel de deslocamento já borra o texto.
 - O canvas guarda a tela inteira entre os quadros (WebGL2 com `preserveDrawingBuffer`, ou 2D): o
   vídeo só pinta as regiões que mudaram. Para ler os pixels (testes), copie para um canvas 2D.
+- A barra é **uma linha só** a partir de 1100 px, e a telemetria nunca quebra para uma segunda
+  linha: ali ela ficava atrás da tela remota e sumia inteira. Ela ocupa o espaço que sobra (no
+  mínimo 400 px; a seleção de qualidade encolhe até 150 px para dar lugar). Faltando espaço,
+  somem primeiro os chips de prioridade 3 (Codif., Decod., Rota), depois o de 2 (Fila). Codec,
+  Resolução, FPS, Banda e RTT ficam sempre. Abaixo de 1100 px, a telemetria ganha uma linha
+  própria; no celular (até 760 px), o nome da máquina também.
+- O chip Codec mostra o nome curto ("H.264 4:4:4 GPU"); o nome do encoder, que pode ser enorme
+  ("Intel® Quick Sync Video H.264 Encoder MFT"), fica na dica. Rota só aparece quando é a local.
 - Os chips de telemetria só aparecem quando há o dado (Fila e Codif. faltam em agentes antigos).
+- Nas consultas de container (`@container`), repita a especificidade de `.telemetry .chip`: a
+  consulta não soma especificidade, e um `display: none` mais fraco perde para o `display: flex`.
 - `data-testid="viewer-status"` e `data-testid="screen"` são usados pelos testes e não podem sumir.
 
 ### ⬇️ Downloads

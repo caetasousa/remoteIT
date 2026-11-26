@@ -196,12 +196,10 @@ func Telemetry(st protocol.Stats, drawn int, l Local) []Segment {
 	if l.DecodeUs > 0 {
 		segs = append(segs, Segment{"Decod.", MsText(l.DecodeUs), Normal})
 	}
-	if l.Route != "" {
-		lv := Muted
-		if l.Route == "local" {
-			lv = Good
-		}
-		segs = append(segs, Segment{"Rota", l.Route, lv})
+	// a rota só aparece quando é a local: pela internet é o normal, e a
+	// barra precisa do espaço (o Diagnóstico mostra sempre)
+	if l.Route == "local" {
+		segs = append(segs, Segment{"Rota", "local", Good})
 	}
 	return segs
 }

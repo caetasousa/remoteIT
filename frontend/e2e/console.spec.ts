@@ -50,6 +50,46 @@ test('senha errada mostra erro e não entra', async ({ page }) => {
   await expect(page.getByTestId('current-user')).toHaveCount(0);
 });
 
+// Com o nome comprido do encoder da Intel e os chips de fila e codificação,
+// a telemetria quebrava para uma segunda linha, atrás da tela remota, e
+// sumia inteira. O stats é trocado no caminho pelo de produção.
+test('a telemetria cabe na barra com o stats de produção', async ({ page }) => {
+  await page.routeWebSocket(/\/ws\/viewer/, (ws) => {
+    const server = ws.connectToServer();
+    server.onMessage((m) => {
+      if (typeof m === 'string' && m.includes('"t":"stats"')) {
+        m = JSON.stringify({
+          t: 'stats',
+          enc: 'H.264 4:4:4 GPU: Intel® Quick Sync Video H.264 Encoder MFT',
+          fps: 58,
+          kbps: 12400,
+          target: 12000,
+          rtt: 132,
+          rttmin: 45,
+          encus: 4200,
+          w: 1920,
+          h: 1080,
+        });
+      }
+      ws.send(m);
+    });
+    ws.onMessage((m) => server.send(m));
+  });
+  await page.setViewportSize({ width: 1280, height: 720 });
+  await login(page, ADMIN.user, ADMIN.pass);
+  await viewAgent(page);
+  const bar = (await page.locator('header.bar').boundingBox())!;
+  for (const label of ['Codec', 'Resolução', 'FPS', 'Banda', 'RTT']) {
+    const chip = page.locator('.stats .chip').filter({ hasText: label });
+    await expect(chip).toBeVisible();
+    const b = (await chip.boundingBox())!;
+    expect(b.y + b.height, `${label} dentro da barra`).toBeLessThanOrEqual(bar.y + bar.height);
+    expect(b.x + b.width, `${label} inteiro na tela`).toBeLessThanOrEqual(1280);
+  }
+  // o nome comprido do encoder fica na dica; no chip, o codec
+  await expect(page.locator('.stats .codec')).toHaveText('H.264 4:4:4 GPU');
+});
+
 test('admin vê a tela remota da máquina', async ({ page }) => {
   await login(page, ADMIN.user, ADMIN.pass);
   await viewAgent(page);
